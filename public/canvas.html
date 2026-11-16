@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FreeStuffCrazy Player — canvas/WebCodecs</title>
+  <style>
+    body { background: #111; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; }
+    canvas { max-width: 90vw; max-height: 90vh; background: black; }
+    #status { position: fixed; top: 8px; left: 8px; color: #0f0; font-family: monospace; font-size: 12px; white-space: pre; }
+  </style>
+</head>
+<body>
+  <!-- Mediabunny 1.65.0: MPL-2.0. Corresponding source and license: /licenses -->
+  <div id="status">loading…</div>
+  <button id="playBtn" style="position:fixed; top:40px; left:8px;">Play</button>
+  <canvas id="canvas"></canvas>
+  <script>
+    const statusEl = document.getElementById('status');
+    const log = (msg) => {
+      console.log(msg);
+      statusEl.textContent = msg;
+    };
+
+    window.onerror = (msg, src, line, col, err) => {
+      log(`WINDOW ERROR: ${msg} @ ${line}:${col}`);
+    };
+    window.addEventListener('unhandledrejection', (ev) => {
+      log(`UNHANDLED REJECTION: ${ev.reason && ev.reason.stack ? ev.reason.stack : ev.reason}`);
+    });
+
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    async function main() {
+      log('importing mediabunny…');
+      const { Input, ALL_FORMATS, UrlSource, VideoSampleSink, AudioBufferSink } = await import(
+        '/vendor/mediabunny.mjs'
+      );
+      log('mediabunny imported');
+      log('opening input…');
+      const input = new Input({
+        formats: ALL_FORMATS,
+        source: new UrlSource('/api/start'),
+      });
+
+      const videoTrack = await input.getPrimaryVideoTrack();
+      const audioTrack = await input.getPrimaryAudioTrack();
+      if (!videoTrack) {
+        log('no video track found');
+        return;
+      }
+      if (audioTrack) {
+        const codec = await audioTrack.getCodec();
+        log(`audio track codec: ${codec}`);
+      } else {
+        log('no audio track found');
+      }
+
+      const width = await videoTrack.getDisplayWidth();
+      const height = await videoTrack.getDisplayHeight();
+
+      const canvas = document.getElementById('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+
+      await new Promise((resolve) => {
+        document.getElementById('playBtn').addEventListener('click', resolve, { once: true });
+      });
+      log('starting playback…');
+
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      window.__audioCtx = audioCtx;
+      await audioCtx.resume();
+      log(`audioCtx.state after resume: ${audioCtx.state}, sampleRate=${audioCtx.sampleRate}`);
+
+      // Lead time before timestamp 0 so the first audio buffer has room to schedule.
+      const audioStartCtxTime = audioCtx.currentTime + 0.3;
+
+      window.__audioDebug = { scheduled: 0, errors: [] };
+
+      async function runAudio() {
+        if (!audioTrack) {
+          log('runAudio: no audioTrack, skipping');
+          return;
+        }
+        log('runAudio: creating AudioBufferSink');
+        const sink = new AudioBufferSink(audioTrack);
+        for await (const { buffer, timestamp } of sink.buffers()) {
+          try {
+            const source = audioCtx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(audioCtx.destination);
+            const when = audioStartCtxTime + timestamp;
+            source.start(when);
+            window.__audioDebug.scheduled += 1;
+            if (window.__audioDebug.scheduled <= 3 || window.__audioDebug.scheduled % 20 === 0) {
+              log(`audio buf #${window.__audioDebug.scheduled} ts=${timestamp.toFixed(2)} when=${when.toFixed(2)} dur=${buffer.duration.toFixed(2)} ch=${buffer.numberOfChannels} rate=${buffer.sampleRate}`);
+            }
+          } catch (err) {
+            window.__audioDebug.errors.push(String(err));
+            log(`audio schedule ERROR: ${err.message}`);
+          }
+        }
+        log(`runAudio: done, scheduled=${window.__audioDebug.scheduled}, errors=${window.__audioDebug.errors.length}`);
+      }
+
+      async function runVideo() {
+        const sink = new VideoSampleSink(videoTrack);
+        let frameCount = 0;
+
+        for await (const sample of sink.samples()) {
+          const targetCtxTime = audioStartCtxTime + sample.timestamp;
+          while (audioCtx.currentTime < targetCtxTime) {
+            await sleep(Math.max(0, (targetCtxTime - audioCtx.currentTime) * 1000));
+          }
+
+          sample.draw(ctx, 0, 0, width, height);
+          sample.close();
+
+          frameCount += 1;
+          if (frameCount % 24 === 0) {
+            log(`frame ${frameCount}  t=${sample.timestamp.toFixed(2)}s  audioClock=${audioCtx.currentTime.toFixed(2)}s`);
+          }
+        }
+
+        log(`video done. ${frameCount} frames rendered.`);
+      }
+
+      await Promise.all([runAudio(), runVideo()]);
+      input.dispose();
+    }
+
+    main().catch((err) => {
+      console.error(err);
+      log(`ERROR: ${err.message}`);
+    });
+  </script>
+</body>
+</html>

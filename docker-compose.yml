@@ -1,0 +1,24 @@
+services:
+  freestuffcrazy-player:
+    build: .
+    ports:
+      - "127.0.0.1:${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATA_DIR: /app/data
+      APP_ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN to your public HTTPS origin}
+      TRUST_PROXY: ${TRUST_PROXY:?Set TRUST_PROXY to your reverse proxy IP or CIDR}
+    volumes:
+      - freestuffcrazy-player-data:/app/data
+      - ./config.json:/app/config.json:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  freestuffcrazy-player-data:

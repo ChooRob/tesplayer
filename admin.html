@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin · FreeStuffCrazy Player</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101010; color: #eee }
+    body { max-width: 1000px; margin: 0 auto; padding: 24px }
+    header, nav, .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px }
+    header h1 { margin: 0; font-size: 1.5rem }
+    header a { margin-left: auto; color: #a5ccff }
+    nav { margin: 24px 0 }
+    button, input { box-sizing: border-box; min-height: 44px; border: 1px solid #666; border-radius: 8px; padding: 8px 12px; font: inherit; color: inherit; background: #222 }
+    button { cursor: pointer }
+    button[aria-selected="true"] { border-color: #7bb5ff; background: #193b64 }
+    button:disabled { opacity: .6; cursor: default }
+    :focus-visible { outline: 2px solid #7bb5ff; outline-offset: 3px }
+    #unlock { max-width: 520px; margin: 24px 0 }
+    #unlock label { display: grid; gap: 6px; margin: 16px 0 }
+  </style>
+</head>
+<body>
+  <header><h1>Admin</h1><button id="lock" hidden>Lock Admin</button><a href="/browse">Back to Browse</a></header>
+  <form id="unlock" autocomplete="off" hidden>
+    <div class="actions"><button id="usePasskey" type="button" hidden>Unlock with passkey</button></div>
+    <div id="enrollment" hidden>
+      <label>Admin token<input id="token" type="password" autocomplete="off" minlength="64" maxlength="64"></label>
+      <div class="actions">
+        <button type="submit" value="unlock">Unlock with token</button>
+        <button id="addPasskey" type="submit" value="register" hidden>Add passkey</button>
+      </div>
+    </div>
+  </form>
+  <p id="adminStatus" role="status"></p>
+  <nav id="adminTabs" aria-label="Admin sections" role="tablist" hidden></nav>
+  <main id="adminPanels"></main>
+  <script src="/admin-webauthn.js"></script>
+  <script src="/admin-page.js" type="module"></script>
+</body>
+</html>

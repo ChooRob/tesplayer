@@ -1,0 +1,21 @@
+node_modules
+.env
+# Saved state: every storage collection is a .<name>.json file in DATA_DIR.
+.*.json
+.*.json.imported
+
+.installation.json
+.server.pid
+data/
+*.tmp
+
+.private-notes/
+.env.*
+!.env.example
+config.local.json
+release/
+
+# Deployment settings may contain account mappings.
+config.json
+*.log
+.DS_Store

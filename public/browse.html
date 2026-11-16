@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FreeStuffCrazy Player</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      background: #111; color: #eee; margin: 0; padding: 16px;
+      font-family: -apple-system, system-ui, sans-serif;
+    }
+    h1 { font-size: 20px; margin: 0; display: flex; align-items: center; gap: 10px; }
+    .brandLink { display: flex; align-items: center; color: #fff; text-decoration: none; font-weight: 700; }
+    .brandLink:hover, .brandLink:focus-visible { text-decoration: underline; }
+    .brandLogoImg { width: 200px; height: auto; }
+    .brandPlayerSuffix { margin-left: 10px; }
+    .brandFallback { display: none; }
+    .brandCrazy { color: #ffc233; }
+    .pageHeader { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .headerRight { display: flex; align-items: center; gap: 10px; }
+    #fullscreenBtn {
+      background: #222; color: #eee; border: 1px solid #444; border-radius: 6px;
+      padding: 8px 14px; font-size: 13px; cursor: pointer;
+    }
+    .toolbar { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
+    .libraries { display: flex; gap: 8px; flex-wrap: wrap; }
+    .libraries button {
+      background: #222; color: #eee; border: 1px solid #444; border-radius: 6px;
+      padding: 10px 16px; font-size: 14px; cursor: pointer;
+    }
+    .libraries button.active { background: #0a84ff; border-color: #0a84ff; }
+    #searchForm { display: flex; gap: 6px; margin-left: auto; }
+    #searchInput {
+      background: #1c1c1c; color: #eee; border: 1px solid #444; border-radius: 6px;
+      padding: 9px 12px; font-size: 14px; width: 220px;
+    }
+    #searchForm button {
+      background: #222; color: #eee; border: 1px solid #444; border-radius: 6px;
+      padding: 9px 14px; font-size: 14px; cursor: pointer;
+    }
+    @media (max-width: 600px) {
+      body { padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 12px max(12px, env(safe-area-inset-left)); }
+      .pageHeader { gap: 10px; }
+      .brandLogoImg { width: 150px; }
+      h1 { font-size: 17px; gap: 6px; }
+      .libraries { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+      .libraries button { min-height: 44px; white-space: nowrap; }
+      #searchForm { margin-left: 0; width: 100%; }
+      /* 16px stops iOS Safari zooming the page when the field is focused. */
+      #searchInput { flex: 1; min-width: 0; width: auto; font-size: 16px; min-height: 44px; }
+      #searchForm button { min-height: 44px; }
+      .grid { grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); gap: 10px; }
+      #fullscreenBtn { min-width: 44px; min-height: 44px; font-size: 18px; padding: 0 10px; }
+      .shortLabel .label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    }
+    .grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 14px;
+    }
+    /* The virtualizer resizes #gridTop/#gridBottom under the user's scroll
+       position every frame; without this, the browser's own scroll-anchoring
+       "corrects" scrollTop to compensate for that resize on top of the
+       virtualizer's own repositioning, and the two corrections compound into
+       a runaway scroll that rockets to the bottom of the list. */
+    #gridTop, #gridBottom, .grid { overflow-anchor: none; }
+    .card { cursor: pointer; }
+    .loadErrorAction { margin-top: 12px; min-height: 44px; padding: 10px 18px; border-radius: 8px; border: 1px solid #555; background: #222; color: #eee; font: inherit; cursor: pointer; }
+    .card .thumbWrap { position: relative; border-radius: 6px; overflow: hidden; background: #222; }
+    .card img {
+      width: 100%; aspect-ratio: 2/3; object-fit: cover; display: block;
+    }
+    .card.episode img { aspect-ratio: 16/9; }
+    .progressBar {
+      position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255,255,255,0.25);
+    }
+    .progressBar .fill { height: 100%; background: #0a84ff; }
+    .card .title { font-size: 13px; margin-top: 4px; line-height: 1.3; }
+.rating::before { content: ''; display: inline-block; width: 1em; height: 1em; margin-right: 3px; vertical-align: -0.12em; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23f5c518' d='M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z'/%3E%3C/svg%3E") center / contain no-repeat; }
+    .card .meta { font-size: 11px; color: #888; }
+    #back {
+      display: none;
+      background: #222; color: #eee; border: 1px solid #444; border-radius: 6px;
+      padding: 10px 16px; font-size: 14px; cursor: pointer;
+    }
+    #loading { color: #888; }
+
+    #continueSection { margin-bottom: 28px; }
+    #continueSection h2 { font-size: 15px; margin: 0 0 10px; color: #ccc; font-weight: 600; }
+    #continueRow {
+      display: flex; gap: 14px; overflow-x: auto;
+      scrollbar-width: none;
+      scroll-snap-type: x mandatory;
+    }
+    #continueRow::-webkit-scrollbar { display: none; }
+    /* Scroll snapping aligns cards for both button and touch scrolling. */
+    .carousel { position: relative; }
+    .carouselBtn {
+      position: absolute; top: 40%; transform: translateY(-50%); z-index: 1;
+      width: 34px; height: 34px; border-radius: 50%;
+      background: rgba(20,20,20,0.75); color: #fff; border: 1px solid #444;
+      font-size: 14px; line-height: 1; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .carouselBtn:active { background: rgba(10,132,255,0.85); border-color: #0a84ff; }
+    .carouselBtn[hidden] { display: none; }
+    .carouselBtn.prev { left: -6px; }
+    .carouselBtn.next { right: -6px; }
+    .continueCard, .recentCard { cursor: pointer; flex-shrink: 0; width: 220px; scroll-snap-align: start; }
+    .continueCard.movie, .recentCard.movie, .recentCard.show { width: 150px; }
+    .continueCard .thumbWrap, .recentCard .thumbWrap { position: relative; border-radius: 6px; overflow: hidden; background: #222; }
+    .continueCard img, .recentCard img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }
+    .continueCard.movie img, .recentCard.movie img, .recentCard.show img { aspect-ratio: 2/3; }
+    .continueCard .title, .recentCard .title { font-size: 13px; margin-top: 4px; line-height: 1.3; }
+    .continueCard .meta, .recentCard .meta { font-size: 11px; color: #888; }
+
+    #recentSection { margin-bottom: 28px; }
+    #recentSection h2 { font-size: 15px; margin: 0 0 10px; color: #ccc; font-weight: 600; }
+    #recentRow {
+      display: flex; gap: 14px; overflow-x: auto;
+      scrollbar-width: none;
+      scroll-snap-type: x mandatory;
+    }
+    #recentRow::-webkit-scrollbar { display: none; }
+
+    /* Show and season headers share the movie detail layout. */
+    #detailHeader { position: relative; margin-bottom: 24px; }
+    /* The fixed detail backdrop must stay behind the entire card, including
+       its unpositioned season/episode labels, not just the thumbnail. */
+    #grid, #loading { position: relative; z-index: 1; }
+    #detailBackdrop, #detailBackdropFade { pointer-events: none; }
+    /* Cover the viewport without inheriting body padding. */
+    #detailBackdrop {
+      position: fixed; inset: 0; z-index: 0; background-size: cover; background-position: center top;
+      filter: brightness(0.35) blur(1px);
+    }
+    #detailBackdropFade {
+      position: fixed; inset: 0; z-index: 0;
+      background: linear-gradient(to top, #111 5%, rgba(17,17,17,0.35) 60%, rgba(17,17,17,0.65));
+    }
+    #detailBack {
+      position: relative; z-index: 1;
+      display: inline-block; margin: 16px 16px 0;
+      color: #fff; text-decoration: none; font-family: -apple-system, system-ui, sans-serif;
+      font-size: 14px; background: rgba(0,0,0,0.5); border: 1px solid #444;
+      padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    }
+    #detailContent { position: relative; z-index: 1; display: flex; gap: 20px; padding: 16px 20px 20px; }
+    #detailPoster { width: 140px; flex-shrink: 0; border-radius: 8px; overflow: hidden; box-shadow: 0 6px 20px rgba(0,0,0,0.5); }
+    #detailPoster img { width: 100%; display: block; }
+    #detailInfo { flex: 1; min-width: 0; padding-top: 4px; }
+    #detailTitle { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+    #detailSubtitle { font-size: 14px; color: #aaa; margin-bottom: 10px; }
+    #detailMeta { display: flex; gap: 8px; align-items: center; color: #ccc; font-size: 13px; margin-bottom: 10px; flex-wrap: wrap; }
+    #detailMeta span { white-space: nowrap; }
+    #detailMeta .badge { border: 1px solid #666; border-radius: 4px; padding: 2px 6px; font-size: 11px; }
+    #detailGenres { margin-bottom: 10px; color: #999; font-size: 12px; }
+    #detailSummary { font-size: 13px; line-height: 1.5; color: #ddd; max-width: 700px; }
+
+    .categories { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .categories button {
+      background: #222; color: #eee; border: 1px solid #444; border-radius: 6px;
+      padding: 10px 16px; font-size: 14px; cursor: pointer; white-space: nowrap;
+    }
+    .categories button.active { background: #0a84ff; border-color: #0a84ff; }
+    #insecureNotice {
+      background: #3a2a00; color: #ffd98a; border: 1px solid #806000; border-radius: 6px;
+      padding: 10px 14px; font-size: 13px; line-height: 1.4; margin-bottom: 16px;
+    }
+    #insecureNotice strong { color: #fff; }
+  </style>
+</head>
+<body>
+  <div class="pageHeader">
+    <h1><a class="brandLink" href="https://freestuffcrazy.com">
+      <img class="brandLogoImg" src="https://freestuffcrazy.com/icons/freestuffcrazy-logo.svg" alt="FreeStuffCrazy">
+      <span class="brandPlayerSuffix">Player</span>
+      <span class="brandFallback">FreeStuff<span class="brandCrazy">CRAZY</span> Player</span>
+    </a></h1>
+    <div class="headerRight">
+      <button id="fullscreenBtn" style="display:none" title="Hide the browser's own chrome">Fullscreen</button>
+      <div id="userBadgeMount"></div>
+    </div>
+  </div>
+  <div id="insecureNotice" role="status" hidden>
+    <strong>This connection isn't secure (no HTTPS).</strong>
+    Canvas playback is turned off, so videos use the standard player. In a Tesla, video only plays while parked.
+  </div>
+  <div class="toolbar">
+    <button id="back"><span data-icon="arrow-left"></span> back</button>
+    <div class="libraries" id="libraries"></div>
+    <form id="searchForm">
+      <input id="searchInput" type="search" placeholder="Search…" />
+      <button type="submit">Search</button>
+    </form>
+  </div>
+  <script type="module">
+    import { mountUserBadge } from '/user-badge.js';
+    import { setupFullscreenButton } from '/fullscreen.js';
+    import { hydrateIcons } from '/icons.js';
+    hydrateIcons();
+    mountUserBadge(document.getElementById('userBadgeMount'), { prepend: false });
+    setupFullscreenButton(document.getElementById('fullscreenBtn'));
+    document.getElementById('insecureNotice').hidden = window.isSecureContext;
+
+    // CSP blocks inline onerror attributes, so wire the brand logo's
+    // fallback here instead; also covers the image having already
+    // failed before this (deferred) script runs.
+    document.querySelectorAll('.brandLogoImg').forEach((img) => {
+      const showFallback = () => {
+        img.nextElementSibling?.remove();
+        img.parentElement.querySelector('.brandFallback').style.display = 'inline';
+        img.remove();
+      };
+      if (img.complete && img.naturalWidth === 0) showFallback();
+      else img.addEventListener('error', showFallback, { once: true });
+    });
+  </script>
+  <div id="continueSection" style="display:none">
+    <h2>Continue Watching</h2>
+    <div class="carousel">
+      <button class="carouselBtn prev" data-for="continueRow" aria-label="Scroll left" hidden><span data-icon="chevron-left"></span></button>
+      <div id="continueRow"></div>
+      <button class="carouselBtn next" data-for="continueRow" aria-label="Scroll right" hidden><span data-icon="chevron-right"></span></button>
+    </div>
+  </div>
+  <div id="recentSection" style="display:none">
+    <h2>Recently Added</h2>
+    <div class="carousel">
+      <button class="carouselBtn prev" data-for="recentRow" aria-label="Scroll left" hidden><span data-icon="chevron-left"></span></button>
+      <div id="recentRow"></div>
+      <button class="carouselBtn next" data-for="recentRow" aria-label="Scroll right" hidden><span data-icon="chevron-right"></span></button>
+    </div>
+  </div>
+  <div id="detailHeader" style="display:none">
+    <div id="detailBackdrop"></div>
+    <div id="detailBackdropFade"></div>
+    <a id="detailBack" href="#"><span data-icon="arrow-left"></span> Back</a>
+    <div id="detailContent">
+      <div id="detailPoster"><img id="detailPosterImg" /></div>
+      <div id="detailInfo">
+        <h2 id="detailTitle"></h2>
+        <div id="detailSubtitle"></div>
+        <div id="detailMeta"></div>
+        <div id="detailGenres"></div>
+        <div id="detailSummary"></div>
+      </div>
+    </div>
+  </div>
+  <div id="loading"></div>
+  <div id="grid">
+    <div id="gridTop"></div>
+    <div class="grid" id="gridItems"></div>
+    <div id="gridBottom"></div>
+  </div>
+  <!-- Plugin-owned tab views mount here. -->
+  <div id="pluginTabRoot"></div>
+
+  <script type="module">
+    import { renderMetadata } from "/metadata.js";
+    import { getTabs, getTab } from "/tab-registry.js";
+    const pageHeaderEl = document.querySelector('.pageHeader');
+    const toolbarEl = document.querySelector('.toolbar');
+    const librariesEl = document.getElementById('libraries');
+    const gridEl = document.getElementById('grid');
+    const gridTopEl = document.getElementById('gridTop');
+    const gridItemsEl = document.getElementById('gridItems');
+    const gridBottomEl = document.getElementById('gridBottom');
+    const backEl = document.getElementById('back');
+    const loadingEl = document.getElementById('loading');
+    const searchForm = document.getElementById('searchForm');
+    const searchInput = document.getElementById('searchInput');
+
+    let currentLibraryId = null;
+    let libraries = [];
+    let currentLibraryItems = []; // the active tab's full, unfiltered item list -- what search filters against
+    let activePluginTab = null; // currently-open plugin tab (see tab-registry.js), if any
+
+    // Persist the active tab without adding a browser history entry.
+    function setTabQueryParam(id) {
+      const url = new URL(location.href);
+      url.searchParams.set('tab', id);
+      history.replaceState(null, '', url);
+    }
+
+    const continueSection = document.getElementById('continueSection');
+    const continueRow = document.getElementById('continueRow');
+    let continueItems = [];
+
+    const recentSection = document.getElementById('recentSection');
+    const recentRow = document.getElementById('recentRow');
+    let recentItems = [];
+    let recentLoadId = 0; // discards a stale in-flight fetch if the library is switched again before it resolves
+
+    // Scroll rows between snap points and hide controls at either end.
+    function setupCarousel(rowEl) {
+      const container = rowEl.closest('.carousel');
+      const prevBtn = container.querySelector('.carouselBtn.prev');
+      const nextBtn = container.querySelector('.carouselBtn.next');
+      prevBtn.addEventListener('click', () => rowEl.scrollBy({ left: -rowEl.clientWidth, behavior: 'smooth' }));
+      nextBtn.addEventListener('click', () => rowEl.scrollBy({ left: rowEl.clientWidth, behavior: 'smooth' }));
+      function updateButtons() {
+        const maxScroll = rowEl.scrollWidth - rowEl.clientWidth;
+        prevBtn.hidden = rowEl.scrollLeft <= 4;
+        nextBtn.hidden = maxScroll <= 4 || rowEl.scrollLeft >= maxScroll - 4;
+      }
+      rowEl.addEventListener('scroll', updateButtons, { passive: true });
+      window.addEventListener('resize', updateButtons);
+      rowEl.updateCarouselButtons = updateButtons; // called again after re-rendering the row's items
+      updateButtons();
+    }
+    setupCarousel(continueRow);
+    setupCarousel(recentRow);
+
+    function showContinueSection(show) {
+      continueSection.style.display = show && continueRow.children.length ? 'block' : 'none';
+    }
+
+    function showRecentSection(show) {
+      recentSection.style.display = show && recentRow.children.length ? 'block' : 'none';
+    }
+
+    const detailHeaderEl = document.getElementById('detailHeader');
+
+    function hideDetailHeader() {
+      detailHeaderEl.style.display = 'none';
+      pageHeaderEl.style.display = '';
+      toolbarEl.style.display = '';
+    }
+
+    // Render show metadata, optionally using the season’s poster.
+    function renderDetailHeader(item, { subtitle = '', poster, onBack } = {}) {
+      const backdropEl = document.getElementById('detailBackdrop');
+      backdropEl.style.backgroundImage = item.backdrop ? `url(${item.backdrop})` : '';
+      document.getElementById('detailPosterImg').src = poster || item.thumbnail || '';
+      document.getElementById('detailTitle').textContent = item.title;
+      document.getElementById('detailSubtitle').textContent = subtitle;
+
+      renderMetadata(document.getElementById('detailMeta'), item);
+
+      document.getElementById('detailGenres').textContent = (item.genres || []).join(' · ');
+      document.getElementById('detailSummary').textContent = item.summary || '';
+
+      // Lives on the header itself rather than in the tab row -- this is a
+      // "go up one level" control tied to this page, not another nav tab.
+      document.getElementById('detailBack').onclick = (ev) => {
+        ev.preventDefault();
+        if (onBack) onBack();
+      };
+
+      // Use the detail view’s back control while its header is visible.
+      pageHeaderEl.style.display = 'none';
+      toolbarEl.style.display = 'none';
+      detailHeaderEl.style.display = 'block';
+    }
+
+    async function loadContinueWatching() {
+      try {
+        continueItems = await fetchJson('/api/library/ondeck');
+      } catch (err) {
+        continueItems = [];
+      }
+      renderContinueRow();
+    }
+
+    // Quiet refresh while the page stays open: keep the row if the request fails,
+    // leave it alone if nothing changed, and keep the viewer's scroll position.
+    let refreshingContinue = false;
+    async function refreshContinueWatching() {
+      if (document.hidden || refreshingContinue) return;
+      refreshingContinue = true;
+      try {
+        const items = await fetchJson('/api/library/ondeck');
+        if (JSON.stringify(items) === JSON.stringify(continueItems)) return;
+        continueItems = items;
+        const scrolled = continueRow.scrollLeft;
+        renderContinueRow();
+        continueRow.scrollLeft = scrolled;
+      } catch { /* keep what is showing */ } finally { refreshingContinue = false; }
+    }
+    const CONTINUE_REFRESH_MS = 60000;
+    setInterval(refreshContinueWatching, CONTINUE_REFRESH_MS);
+    document.addEventListener('visibilitychange', refreshContinueWatching);
+
+    function renderContinueRow() {
+      // Filter by librarySectionId; media type alone does not identify a library.
+      const items = continueItems.filter((item) => item.librarySectionId === currentLibraryId);
+
+      continueRow.innerHTML = '';
+      continueRow.scrollLeft = 0; // a scrollable element can retain its own scroll position across reloads independent of the page itself -- force a deterministic start
+      for (const item of items) {
+          const card = document.createElement('div');
+          card.className = 'continueCard' + (item.type === 'movie' ? ' movie' : '');
+
+          const thumbWrap = document.createElement('div');
+          thumbWrap.className = 'thumbWrap';
+          const img = document.createElement('img');
+          img.loading = 'lazy'; // before src, or the image starts loading at once
+          img.src = item.thumbnail || '';
+          thumbWrap.appendChild(img);
+
+          if (item.durationMs && item.viewOffset > 0) {
+            const bar = document.createElement('div');
+            bar.className = 'progressBar';
+            const fill = document.createElement('div');
+            fill.className = 'fill';
+            fill.style.width = `${Math.min(100, (item.viewOffset / item.durationMs) * 100)}%`;
+            bar.appendChild(fill);
+            thumbWrap.appendChild(bar);
+          }
+          card.appendChild(thumbWrap);
+
+          const title = document.createElement('div');
+          title.className = 'title';
+          title.textContent = item.type === 'episode' ? item.showTitle : item.title;
+          card.appendChild(title);
+
+          const meta = document.createElement('div');
+          meta.className = 'meta';
+          meta.textContent = item.type === 'episode'
+            ? `${item.season != null ? 'S' + item.season : ''}${item.episode != null ? 'E' + item.episode : ''} ${item.title}`.trim()
+            : (item.year || '');
+          card.appendChild(meta);
+
+          // Continue Watching always resumes/plays directly — no details screen.
+        card.addEventListener('click', () => playItem(item));
+        continueRow.appendChild(card);
+      }
+      showContinueSection(true);
+      continueRow.updateCarouselButtons();
+    }
+
+
+    async function fetchJson(url) {
+      const res = await fetch(url);
+      if (!res.ok) {
+        // The server may explain the failure for the viewer (with a code).
+        const data = await res.json().catch(() => null);
+        const explained = typeof data?.error === 'string' && typeof data?.code === 'string';
+        throw Object.assign(new Error(explained ? data.error : `${url}: ${res.status}`), { status: res.status, code: explained ? data.code : null });
+      }
+      return res.json();
+    }
+
+    // A failure the viewer can act on: the server's own explanation, and the
+    // next step (sign in again when the session ended, otherwise retry).
+    function showLoadError(err) {
+      if (!err?.code) { loadingEl.textContent = `Error: ${err.message}`; return; }
+      const message = document.createElement('p');
+      message.textContent = err.message;
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'loadErrorAction';
+      if (err.status === 401) {
+        action.textContent = 'Sign in again';
+        action.addEventListener('click', () => { location.href = '/login'; });
+      } else {
+        action.textContent = 'Try again';
+        action.addEventListener('click', () => location.reload());
+      }
+      loadingEl.replaceChildren(message, action);
+    }
+
+    function isResumable(item) {
+      return item.viewOffset > 5000 && item.durationMs && item.viewOffset < item.durationMs - 30000;
+    }
+
+    function playItem(item) {
+      const params = new URLSearchParams({ key: item.ratingKey });
+      // Resume a bit before the stored offset so we don't drop the last line of dialogue.
+      if (isResumable(item)) {
+        params.set('resume', String(Math.max(0, Math.floor(item.viewOffset / 1000) - 3)));
+      }
+      // Carries the active tab through so the player's back link can
+      // return straight to it (see canvas2.html).
+      if (currentLibraryId) params.set('tab', currentLibraryId);
+      window.location.href = `/canvas2?${params}`;
+    }
+
+    function openItem(item) {
+      // Details screen is movies-only. Episodes always play directly (as before),
+      // and an in-progress movie skips straight back into resume playback.
+      if (item.type !== 'movie' || isResumable(item)) {
+        playItem(item);
+      } else {
+        const params = new URLSearchParams({ key: item.ratingKey });
+        if (currentLibraryId) params.set('tab', currentLibraryId);
+        window.location.href = `/detail?${params}`;
+      }
+    }
+
+    // Dispatch cards by type; Recently Added may contain both seasons and episodes.
+    function handleItemClick(item, { skippedSeasons = false } = {}) {
+      if (item.type === 'show') {
+        openShowSeasons(item.ratingKey, item.title);
+      } else if (item.type === 'season') {
+        // Skip the season-list back target when navigation bypassed that list.
+        openSeason(item, { skippedSeasons });
+      } else {
+        openItem(item);
+      }
+    }
+
+    async function loadRecentlyAdded(libId) {
+      const loadId = ++recentLoadId;
+      try {
+        recentItems = await fetchJson(`/api/library/library/${libId}/recentlyadded`);
+      } catch (err) {
+        recentItems = [];
+      }
+      if (loadId !== recentLoadId) return; // library switched again while this was in flight
+      renderRecentRow();
+    }
+
+    function renderRecentRow() {
+      recentRow.innerHTML = '';
+      recentRow.scrollLeft = 0;
+      for (const item of recentItems) {
+        const card = document.createElement('div');
+        card.className = 'recentCard ' + item.type;
+
+        const thumbWrap = document.createElement('div');
+        thumbWrap.className = 'thumbWrap';
+        const img = document.createElement('img');
+        img.loading = 'lazy'; // before src, or the image starts loading at once
+        img.src = item.thumbnail || '';
+        thumbWrap.appendChild(img);
+        card.appendChild(thumbWrap);
+
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.textContent = item.type === 'episode' ? item.showTitle : item.title;
+        card.appendChild(title);
+
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        if (item.type === 'episode') {
+          meta.textContent = `${item.season != null ? 'S' + item.season : ''}${item.episode != null ? 'E' + item.episode : ''} ${item.title}`.trim();
+        } else if (item.type === 'season') {
+          meta.textContent = `${item.showTitle || ''} — ${item.title}`.replace(/^ — /, '');
+        } else {
+          meta.textContent = item.year || '';
+        }
+        card.appendChild(meta);
+
+        card.addEventListener('click', () => handleItemClick(item, { skippedSeasons: true }));
+        recentRow.appendChild(card);
+      }
+      showRecentSection(true);
+      recentRow.updateCarouselButtons();
+    }
+
+    // Render only rows near the viewport; spacers preserve scroll position.
+    const GRID_MIN_COL_WIDTH = 150; // keep in sync with .grid's CSS minmax()
+    const GRID_ROW_BUFFER = 2; // extra rows rendered above/below the viewport
+    const gridState = { items: [], episode: false, columns: 0, rowHeight: 0, renderedRange: null };
+
+    function buildCard(item, episode) {
+      const isSeason = item.type === 'season';
+      const card = document.createElement('div');
+      card.className = 'card' + (episode ? ' episode' : '');
+
+      const thumbWrap = document.createElement('div');
+      thumbWrap.className = 'thumbWrap';
+
+      const img = document.createElement('img');
+      img.loading = 'lazy'; // before src, or the image starts loading at once
+      img.src = item.thumbnail || '';
+      thumbWrap.appendChild(img);
+
+      if (item.durationMs && item.viewOffset > 0) {
+        const bar = document.createElement('div');
+        bar.className = 'progressBar';
+        const fill = document.createElement('div');
+        fill.className = 'fill';
+        fill.style.width = `${Math.min(100, (item.viewOffset / item.durationMs) * 100)}%`;
+        bar.appendChild(fill);
+        thumbWrap.appendChild(bar);
+      }
+
+      card.appendChild(thumbWrap);
+
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = episode
+        ? `${item.season != null ? 'S' + item.season : ''}${item.episode != null ? 'E' + item.episode : ''} ${item.title}`.trim()
+        : item.title;
+      card.appendChild(title);
+
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      if (isSeason) {
+        meta.textContent = item.leafCount
+          ? `${item.viewedLeafCount || 0}/${item.leafCount} episodes`
+          : '';
+      } else if (episode) {
+        meta.textContent = item.duration ? `${item.duration}m` : '';
+      } else {
+        meta.textContent = [item.year, item.duration ? `${item.duration}m` : null].filter(Boolean).join(' · ');
+      }
+      card.appendChild(meta);
+
+      card.addEventListener('click', () => handleItemClick(item));
+      return card;
+    }
+
+    function measureColumns() {
+      const style = getComputedStyle(gridItemsEl);
+      const gap = parseFloat(style.columnGap) || 14;
+      return Math.max(1, Math.floor((gridItemsEl.clientWidth + gap) / (GRID_MIN_COL_WIDTH + gap)));
+    }
+
+    // Measure a rendered card so virtualized spacers match the current CSS.
+    function measureRowHeight(episode, sampleItem) {
+      const probe = document.createElement('div');
+      probe.style.position = 'absolute';
+      probe.style.visibility = 'hidden';
+      probe.style.pointerEvents = 'none';
+      probe.style.left = '-99999px';
+      probe.style.top = '0';
+      probe.style.width = `${gridItemsEl.clientWidth}px`;
+      probe.className = gridItemsEl.className;
+      document.body.appendChild(probe);
+      const card = buildCard(sampleItem, episode);
+      probe.appendChild(card);
+      const rowGap = parseFloat(getComputedStyle(probe).rowGap) || 14;
+      const height = card.getBoundingClientRect().height + rowGap;
+      document.body.removeChild(probe);
+      return height || 300;
+    }
+
+    function clearGrid() {
+      gridState.items = [];
+      gridState.columns = 0;
+      gridState.rowHeight = 0;
+      gridState.renderedRange = null;
+      gridItemsEl.innerHTML = '';
+      gridTopEl.style.height = '0px';
+      gridBottomEl.style.height = '0px';
+    }
+
+    function renderGrid(items, { episode = false } = {}) {
+      gridState.items = items;
+      gridState.episode = episode;
+      gridState.columns = 0;
+      gridState.rowHeight = 0;
+      gridState.renderedRange = null;
+      renderVirtualGridWindow();
+    }
+
+    function renderVirtualGridWindow() {
+      if (gridEl.style.display === 'none' || !gridState.items.length) {
+        if (gridItemsEl.children.length || gridState.renderedRange) {
+          gridItemsEl.innerHTML = '';
+          gridTopEl.style.height = '0px';
+          gridBottomEl.style.height = '0px';
+          gridState.renderedRange = null;
+        }
+        return;
+      }
+
+      const columns = measureColumns();
+      if (columns !== gridState.columns) {
+        gridState.columns = columns;
+        gridState.rowHeight = 0;
+      }
+      if (!gridState.rowHeight) {
+        gridState.rowHeight = measureRowHeight(gridState.episode, gridState.items[0]);
+      }
+
+      const { items, episode, rowHeight } = gridState;
+      const totalRows = Math.ceil(items.length / columns);
+      const scrolledPast = Math.max(0, -gridEl.getBoundingClientRect().top);
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+      const firstRow = Math.max(0, Math.floor(scrolledPast / rowHeight) - GRID_ROW_BUFFER);
+      const lastRow = Math.min(totalRows - 1, Math.ceil((scrolledPast + viewportHeight) / rowHeight) + GRID_ROW_BUFFER);
+
+      const range = `${firstRow}-${lastRow}`;
+      if (gridState.renderedRange === range) return;
+      gridState.renderedRange = range;
+
+      gridTopEl.style.height = `${firstRow * rowHeight}px`;
+      gridBottomEl.style.height = `${Math.max(0, (totalRows - 1 - lastRow) * rowHeight)}px`;
+
+      gridItemsEl.innerHTML = '';
+      const startIdx = firstRow * columns;
+      const endIdx = Math.min(items.length, (lastRow + 1) * columns);
+      for (let i = startIdx; i < endIdx; i++) {
+        gridItemsEl.appendChild(buildCard(items[i], episode));
+      }
+    }
+
+    let gridWindowRafPending = false;
+    function scheduleRenderVirtualGridWindow() {
+      if (gridWindowRafPending) return;
+      gridWindowRafPending = true;
+      requestAnimationFrame(() => {
+        gridWindowRafPending = false;
+        renderVirtualGridWindow();
+      });
+    }
+    window.addEventListener('scroll', scheduleRenderVirtualGridWindow, { passive: true });
+    window.addEventListener('resize', scheduleRenderVirtualGridWindow);
+
+    function showBack(onClick) {
+      backEl.style.display = 'inline-block';
+      backEl.onclick = onClick;
+    }
+
+    // Close the active plugin view before showing library or search results.
+    function closeActiveTab() {
+      if (activePluginTab) { activePluginTab.onClose?.(); activePluginTab = null; }
+    }
+
+    // Update shared navigation; each plugin renders its own tab content.
+    async function openPluginTab(tab) {
+      currentLibraryId = tab.id;
+      setTabQueryParam(tab.id);
+      backEl.style.display = 'none';
+      showContinueSection(false);
+      showRecentSection(false);
+      hideDetailHeader();
+      [...librariesEl.children].forEach((btn) => btn.classList.toggle('active', btn.dataset.id === tab.id));
+      gridEl.style.display = 'none';
+      activePluginTab = tab;
+      await tab.onOpen();
+    }
+
+    async function openLibrary(lib) {
+      currentLibraryId = lib.id;
+      setTabQueryParam(lib.id);
+      backEl.style.display = 'none';
+      closeActiveTab();
+      gridEl.style.display = '';
+      renderContinueRow();
+      recentRow.innerHTML = '';
+      recentRow.scrollLeft = 0;
+      showRecentSection(false);
+      hideDetailHeader();
+      loadRecentlyAdded(lib.id);
+      [...librariesEl.children].forEach((btn) => btn.classList.toggle('active', btn.dataset.id === lib.id));
+      loadingEl.textContent = `Loading ${lib.title}…`;
+      clearGrid();
+      try {
+        const { items } = await fetchJson(`/api/library/library/${lib.id}?sort=titleSort`);
+        loadingEl.textContent = '';
+        currentLibraryItems = items;
+        renderGrid(items);
+      } catch (err) {
+        loadingEl.textContent = `Failed to load: ${err.message}`;
+      }
+    }
+
+    async function openShowSeasons(ratingKey, title) {
+      showContinueSection(false);
+      showRecentSection(false);
+      hideDetailHeader();
+      backEl.style.display = 'none'; // the back control lives on the detail header itself now, not the tab row
+      const onBack = () => {
+        const lib = libraries.find((l) => l.id === currentLibraryId);
+        if (lib) openLibrary(lib);
+      };
+      loadingEl.textContent = `Loading ${title}…`;
+      clearGrid();
+      try {
+        const [seasons, showItem] = await Promise.all([
+          fetchJson(`/api/library/show/${ratingKey}/seasons`),
+          fetchJson(`/api/library/item/${ratingKey}`).catch(() => null),
+        ]);
+        loadingEl.textContent = '';
+        if (seasons.length === 1) {
+          // Skip the seasons screen when there's nothing to choose between;
+          // back should return straight to the library, not loop through it.
+          openSeason(seasons[0], { skippedSeasons: true });
+          return;
+        }
+        if (showItem) {
+          renderDetailHeader(showItem, { onBack });
+        } else {
+          // The show's own details failed to load -- fall back to the tab
+          // row's back control so there's still some way out.
+          showBack(onBack);
+        }
+        renderGrid(seasons);
+      } catch (err) {
+        loadingEl.textContent = `Failed to load: ${err.message}`;
+      }
+    }
+
+    async function openSeason(season, { skippedSeasons = false } = {}) {
+      showContinueSection(false);
+      showRecentSection(false);
+      hideDetailHeader();
+      backEl.style.display = 'none';
+      const onBack = skippedSeasons
+        ? () => { const lib = libraries.find((l) => l.id === currentLibraryId); if (lib) openLibrary(lib); }
+        : () => openShowSeasons(season.showRatingKey, season.showTitle);
+      loadingEl.textContent = `Loading ${season.showTitle} — ${season.title}…`;
+      clearGrid();
+      try {
+        const [episodes, showItem] = await Promise.all([
+          fetchJson(`/api/library/season/${season.ratingKey}/episodes`),
+          season.showRatingKey ? fetchJson(`/api/library/item/${season.showRatingKey}`).catch(() => null) : null,
+        ]);
+        loadingEl.textContent = '';
+        if (showItem) {
+          renderDetailHeader(showItem, { subtitle: season.title, poster: season.thumbnail, onBack });
+        } else {
+          showBack(onBack);
+        }
+        renderGrid(episodes, { episode: true });
+      } catch (err) {
+        loadingEl.textContent = `Failed to load: ${err.message}`;
+      }
+    }
+
+    // Filter the loaded library items; plugin tabs manage their own content.
+    function runSearch(query) {
+      if (activePluginTab?.onSearch) {
+        activePluginTab.onSearch(query);
+        return;
+      }
+      showContinueSection(false);
+      showRecentSection(false);
+      hideDetailHeader();
+      closeActiveTab();
+      gridEl.style.display = '';
+      [...librariesEl.children].forEach((btn) => btn.classList.remove('active'));
+      showBack(() => {
+        const lib = libraries.find((l) => l.id === currentLibraryId) || libraries[0];
+        if (lib) openLibrary(lib);
+      });
+      const q = query.trim().toLowerCase();
+      const results = currentLibraryItems.filter((item) => item.title.toLowerCase().includes(q));
+      loadingEl.textContent = results.length ? '' : `No results for "${query}"`;
+      clearGrid();
+      renderGrid(results);
+    }
+
+    searchForm.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const query = searchInput.value.trim();
+      if (query) runSearch(query);
+    });
+
+    async function main() {
+      loadingEl.textContent = 'Loading libraries…';
+      libraries = await fetchJson('/api/library/libraries');
+      loadingEl.textContent = '';
+      librariesEl.innerHTML = '';
+      for (const lib of libraries) {
+        const btn = document.createElement('button');
+        btn.textContent = lib.title;
+        btn.dataset.id = lib.id;
+        btn.addEventListener('click', () => openLibrary(lib));
+        librariesEl.appendChild(btn);
+      }
+      for (const tab of getTabs()) {
+        const btn = document.createElement('button');
+        btn.textContent = tab.label;
+        btn.dataset.id = tab.id;
+        btn.addEventListener('click', () => openPluginTab(tab));
+        librariesEl.appendChild(btn);
+      }
+
+      const requestedTab = new URLSearchParams(location.search).get('tab');
+      const requestedLibrary = libraries.find((l) => l.id === requestedTab);
+      const requestedPluginTab = getTab(requestedTab);
+      if (requestedPluginTab) {
+        openPluginTab(requestedPluginTab);
+      } else if (requestedLibrary) {
+        openLibrary(requestedLibrary);
+      } else if (libraries.length) {
+        openLibrary(libraries[0]);
+      }
+      loadContinueWatching();
+    }
+
+    // Wait for plugin registration before building navigation and restoring the tab.
+    (async () => {
+      try {
+        const { scripts } = await fetchJson('/api/plugin/frontend');
+        await Promise.all(scripts.map((src) => import(src)));
+      } catch (err) {
+        console.error('Failed to load plugin frontend assets', err);
+      }
+      await main();
+    })().catch(showLoadError);
+
+    // Refresh Continue Watching when browser history restores a cached page.
+    window.addEventListener('pageshow', (event) => {
+      if (event.persisted) loadContinueWatching();
+    });
+  </script>
+</body>
+</html>

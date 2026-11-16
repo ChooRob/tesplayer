@@ -1,0 +1,598 @@
+// Plex as a media source: sign-in, library browsing, HLS playback through
+// Plex's transcoder, and watch state. server.js talks to it only through the
+// source interface described in sources.js, so other backends can sit beside it.
+
+import crypto from 'node:crypto';
+import { rewriteManifest } from './plex-manifest.js';
+import { resolveAccountId, authorizedNextUp } from './profile-identity.js';
+import { installationId } from './private-storage.js';
+import { QUALITY_LEVELS, normalizeQuality, qualityTiers, plexProfileConstraints } from './public/engine/quality-tiers.js';
+import { directPlexOrigin, fetchAvatar, mediaProxyPath, safeError } from './security.js';
+import { plexSessionId, createPlexSessionProbe, fetchPlexSegment } from './plex-session.js';
+import { createPlexLibrary } from './plex-library.js';
+import { createPlexAuth } from './plex-auth.js';
+import { plexDeviceHeaders, resolvePlexUrl } from './plex-connection.js';
+import * as localProgress from './local-progress.js';
+import { adminConfigured, adminSpec, plexEmail } from './admin-auth.js';
+import { firstPluginWith } from './plugins.js';
+import { createPlexAccountDirectory } from './plex-account-directory.js';
+
+export async function createPlexSource({ id = 'plex', config, plugins, store, pipeUpstream, env = process.env }) {
+  const PLEX_TOKEN = env.PLEX_TOKEN;
+  if (!PLEX_TOKEN) throw new Error('Missing PLEX_TOKEN in environment');
+  const CLIENT_ID = env.PLEX_CLIENT_ID || installationId();
+  const PRODUCT_NAME = config.plex.productName;
+
+  // Default to the configured token for setup; content routes pass the profile token.
+  function plexHeaders(token = PLEX_TOKEN) {
+    return {
+      'X-Plex-Client-Identifier': CLIENT_ID,
+      ...plexDeviceHeaders(PRODUCT_NAME),
+      'X-Plex-Version': '1.0',
+      'X-Plex-Platform': 'Chrome',
+      'X-Plex-Token': token,
+    };
+  }
+
+  // Resolve a reachable Plex URL when the configured address is missing or unavailable.
+  const PLEX_URL = await resolvePlexUrl({
+    token: PLEX_TOKEN,
+    clientId: CLIENT_ID,
+    productName: PRODUCT_NAME,
+    preferredUrl: env.PLEX_URL,
+  });
+  console.log(`Using Plex server at ${PLEX_URL}`);
+
+  // Accounts seen at sign-in, so admin pages can find them by name. Only kept
+  // when the admin area is configured; nothing else reads it.
+  const accountDirectory = adminConfigured(env) && env.SESSION_SECRET
+    ? createPlexAccountDirectory({ collection: store.collection('plex-accounts'), secret: env.SESSION_SECRET }) : null;
+
+  const plexAuth = createPlexAuth({
+    plexUrl: PLEX_URL, token: PLEX_TOKEN, clientId: CLIENT_ID, productName: PRODUCT_NAME, plugins, store, sourceId: id,
+    onAccount: accountDirectory && (identity => accountDirectory.remember(identity)),
+  });
+
+  // Single tenant (no plugin choosing servers): only the Plex account whose
+  // confirmed email is PLEX_EMAIL may sign in; its Home profiles still can.
+  const SIGN_IN_EMAIL = firstPluginWith(plugins, 'resolveServer') ? null : plexEmail(env);
+
+  // The admin is the server owner's Home profile on the account whose
+  // confirmed plex.tv email is named in FREESTUFFCRAZY_ADMIN=plex:<email>, or by
+  // default the PLEX_EMAIL account.
+  const spec = adminSpec(env);
+  const adminEmail = spec ? (spec.type === 'plex' ? spec.who : null) : plexEmail(env);
+  plexAuth.getAdminIdentity = async req => {
+    if (!adminEmail || !plexAuth.getSessionIsAdmin(req)) return null;
+    const identity = await plexAuth.getSessionIdentity(req);
+    // The name reaches the browser (passkey user name), so it's the Plex
+    // username, never the email.
+    return identity?.confirmedEmail === adminEmail ? { id: `plex:${identity.id}`, name: identity.username || `Plex account ${identity.id}` } : null;
+  };
+
+  // Identifies this install's server by machineIdentifier, not connection URI,
+  // so the same server's data stays in one bucket regardless of which URI a
+  // session happens to resolve to.
+  const adminMachineIdentifier = await plexAuth.getMachineIdentifier();
+  localProgress.bindLegacyServer(adminMachineIdentifier, store);
+
+  // Use the server’s played threshold; fall back to 90% if unavailable.
+  try {
+    const prefsRes = await fetch(`${PLEX_URL}/:/prefs`, { headers: { Accept: 'application/json', 'X-Plex-Token': PLEX_TOKEN }, signal: AbortSignal.timeout(10000), redirect: 'error' });
+    const prefsData = await prefsRes.json();
+    const pref = (prefsData.MediaContainer.Setting || []).find((s) => s.id === 'LibraryVideoPlayedThreshold');
+    if (pref?.value != null) localProgress.setFinishedThreshold(Number(pref.value) / 100, adminMachineIdentifier);
+  } catch (err) {
+    console.warn(`Couldn't read LibraryVideoPlayedThreshold from Plex; using 90% default: ${safeError(err)}`);
+  }
+
+  // Use the session’s profile token, with a configured-token fallback when auth is disabled.
+  function tokenForRequest(req) {
+    const token = req && plexAuth.getSessionPlexToken(req);
+    if (req && config.auth.enabled && !token) throw new Error('Not authenticated');
+    return token || PLEX_TOKEN;
+  }
+
+  // Mirrors tokenForRequest -- which Plex server this request's token is
+  // valid against, defaulting to PLEX_URL.
+  function urlForRequest(req) {
+    return (req && plexAuth.getSessionPlexUrl(req)) || PLEX_URL;
+  }
+
+  // Create lightweight library clients per request; session probes are cached separately.
+  function libraryFor(token, plexUrl = PLEX_URL, clientId = CLIENT_ID) {
+    return createPlexLibrary({ plexUrl, token, clientId, productName: PRODUCT_NAME });
+  }
+  const adminLibrary = libraryFor(PLEX_TOKEN);
+
+  // A stable identifier per Home profile, not one app-wide CLIENT_ID for
+  // everyone, so Plex's hub personalization resolves the right account.
+  function clientIdForRequest(req) {
+    const profileId = req && plexAuth.getSessionProfileId(req);
+    return profileId ? `${CLIENT_ID}-${profileId}` : CLIENT_ID;
+  }
+
+  // The common case of every argument above derived from the same request.
+  function libraryForRequest(req) {
+    return libraryFor(tokenForRequest(req), urlForRequest(req), clientIdForRequest(req));
+  }
+
+  // Owner-only lookups use the admin token for this install's own server;
+  // any other (genuinely different) server uses the requester's own token.
+  function adminLibraryFor(req, url) {
+    return plexAuth.getSessionMachineIdentifier(req) === adminMachineIdentifier ? adminLibrary : libraryFor(tokenForRequest(req), url, clientIdForRequest(req));
+  }
+
+  // Keys local-progress.js's storage by physical server, not connection URI.
+  function serverIdForRequest(req) {
+    return (req && plexAuth.getSessionMachineIdentifier(req)) || adminMachineIdentifier;
+  }
+
+  // Resolves the verified Home profile to a PMS account ID, caching accounts
+  // per physical server rather than per connection URI.
+  const accountsCacheByMachineId = new Map(); // machineIdentifier -> { accounts, at }
+  async function accountIdForRequest(req) {
+    const profile = await plexAuth.getVerifiedProfile(req);
+    if (!profile) return null;
+    const url = urlForRequest(req);
+    const machineId = plexAuth.getSessionMachineIdentifier(req) || url;
+    let entry = accountsCacheByMachineId.get(machineId);
+    if (!entry || Date.now() - entry.at > 60_000) {
+      entry = { accounts: await adminLibraryFor(req, url).accounts(), at: Date.now() };
+      if (accountsCacheByMachineId.size >= config.auth.maxSessions) accountsCacheByMachineId.delete(accountsCacheByMachineId.keys().next().value);
+      accountsCacheByMachineId.set(machineId, entry);
+    }
+    return resolveAccountId(profile, entry.accounts, config.plex.profileAccountIds);
+  }
+
+  const sessionProbesByToken = new Map();
+  function sessionProbeFor(token, plexUrl = PLEX_URL) {
+    const key = `${plexUrl}::${token}`;
+    if (!sessionProbesByToken.has(key)) {
+      if (sessionProbesByToken.size >= config.auth.maxSessions) sessionProbesByToken.delete(sessionProbesByToken.keys().next().value);
+      sessionProbesByToken.set(key, createPlexSessionProbe({ baseUrl: plexUrl, token }));
+    }
+    return sessionProbesByToken.get(key);
+  }
+
+  // Never expose the configured installation token to anonymous/auth-disabled clients.
+  function directTokenForRequest(req) {
+    return directPlexOrigin(plexAuth.getSessionPlexUrl(req) || PLEX_URL)
+      ? plexAuth.getSessionPlexToken(req) || '' : '';
+  }
+
+  // ---- Playback -----------------------------------------------------------
+
+  async function stopTranscode({ sessionId, token, plexUrl = PLEX_URL }) {
+    if (!sessionId) return;
+    const params = new URLSearchParams({ session: sessionId });
+    try {
+      await fetch(`${plexUrl}/video/:/transcode/universal/stop?${params}`, {
+        headers: plexHeaders(token), redirect: 'error',
+        signal: AbortSignal.timeout(5000),
+      });
+    } catch {
+      console.error('Failed to stop Plex transcode session');
+    }
+  }
+
+  // The client picks a starting tier and can step down if playback struggles.
+  function qualityTierFor(value) {
+    return typeof value === 'string' && QUALITY_LEVELS.includes(value) ? value : 'high';
+  }
+
+  function plexTranscodeParams(path, session, quality = 'high') {
+    quality = normalizeQuality(quality);
+    const tier = qualityTiers(config.plex.videoBitrate)[quality];
+    return new URLSearchParams({
+      hasMDE: '1',
+      path,
+      mediaIndex: '0',
+      partIndex: '0',
+      protocol: 'hls',
+      fastSeek: '1',
+      directPlay: '0',
+      directStream: '0',
+      directStreamAudio: '0',
+      videoCodec: 'h264',
+      audioCodec: 'aac',
+      maxAudioChannels: '2',
+      'X-Plex-Client-Profile-Extra': plexProfileConstraints(quality),
+      subtitleSize: '100',
+      audioBoost: '100',
+      location: 'lan',
+      session,
+      maxVideoBitrate: String(tier.videoBitrate),
+      videoBitrate: String(tier.videoBitrate),
+      videoResolution: tier.videoResolution,
+      videoQuality: '100',
+      'X-Plex-Incomplete-Segments': '1',
+    });
+  }
+
+  // Runs the decision call Plex needs before start.m3u8 will serve a
+  // playlist, then proxies that playlist back with its URIs rewritten through /proxy/.
+  async function startStream(req, res, { itemId, state, stopState }) {
+    const token = tokenForRequest(req);
+    const plexUrl = urlForRequest(req);
+    const sessionId = crypto.randomUUID();
+    const params = plexTranscodeParams(`/library/metadata/${itemId}`, sessionId, qualityTierFor(req.query.quality));
+
+    const decisionRes = await fetch(`${plexUrl}/video/:/transcode/universal/decision?${params}`, {
+      headers: { ...plexHeaders(token), Accept: 'application/json' },
+      signal: AbortSignal.timeout(15000), redirect: 'error',
+    });
+    if (!decisionRes.ok) {
+      await decisionRes.body?.cancel();
+      console.error('Plex transcode decision failed', decisionRes.status);
+      await stopState(state);
+      res.status(decisionRes.status).send('Plex playback request failed');
+      return;
+    }
+    await decisionRes.body?.cancel();
+
+    const active = { source: id, sessionId, token, plexUrl };
+    state.active = active;
+    const upstreamUrl = `${plexUrl}/video/:/transcode/universal/start.m3u8?${params}`;
+    const plexRes = await fetch(upstreamUrl, { headers: plexHeaders(token), signal: AbortSignal.timeout(15000), redirect: 'error' });
+    if (!plexRes.ok) {
+      await plexRes.body?.cancel();
+      console.error('Plex start.m3u8 failed', plexRes.status);
+      await stopState(state);
+      res.status(plexRes.status).send('Plex playback request failed');
+      return;
+    }
+    state.active = active;
+
+    const manifest = await plexRes.text();
+    res.set('Content-Type', 'application/vnd.apple.mpegurl');
+    res.send(rewriteManifest(manifest, upstreamUrl, sessionId, req.query.direct === '1' ? directTokenForRequest(req) : ''));
+  }
+
+  // Relay playlists and segments of a stream this viewer owns.
+  async function proxyMedia(req, res, { ownsSession }) {
+    try {
+      const token = tokenForRequest(req);
+      const plexUrl = urlForRequest(req);
+      const targetPath = req.params[0];
+      const ownedSession = plexSessionId('/' + targetPath);
+      if (!mediaProxyPath(targetPath, ownedSession) || !ownsSession(ownedSession)) return res.status(403).end();
+      const url = new URL(`${plexUrl}/${targetPath}`);
+      for (const [k, v] of Object.entries(req.query)) {
+        if (/^X-Plex-/i.test(k) || !['offset', 'copyts', 'wait', 'partIndex', 'mediaIndex'].includes(k)) continue;
+        if (typeof v === 'string' && v.length <= 128) url.searchParams.set(k, v);
+      }
+
+      const headers = plexHeaders(token);
+      const result = await fetchPlexSegment(url, { headers, probe: sessionProbeFor(token, plexUrl), session: ownedSession });
+      if (result.expired) {
+        return res.status(410).json({ code: 'PLEX_SESSION_EXPIRED', error: 'Plex playback session expired' });
+      }
+
+      const upstream = result.response;
+      const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
+      if (!upstream.ok) { await upstream.body?.cancel(); return res.status(upstream.status).end(); }
+      if (!/^(video\/|audio\/|application\/(?:vnd\.apple\.mpegurl|x-mpegurl|octet-stream))/.test(contentType)) { await upstream.body?.cancel(); return res.status(502).end(); }
+
+      if (contentType.includes('mpegurl')) {
+        const text = await upstream.text();
+        res.status(upstream.status);
+        res.set('Content-Type', contentType);
+        res.send(rewriteManifest(text, url, ownedSession, req.query.direct === '1' ? directTokenForRequest(req) : ''));
+        return;
+      }
+
+      res.status(upstream.status);
+      res.set('Content-Type', contentType);
+      if (upstream.body) pipeUpstream(upstream, res);
+      else res.end();
+    } catch (err) {
+      console.error('Plex request failed');
+      res.status(500).send(safeError(err));
+    }
+  }
+
+  // ---- Watch state --------------------------------------------------------
+
+  // Records episode completions locally to supplement Plex history for next-up.
+  // plexUrl looks the item up; serverId is the stable machineIdentifier
+  // local-progress.js stores against -- the two can legitimately differ.
+  async function recordFinishedEpisodeIfApplicable(accountId, ratingKey, token, plexUrl = PLEX_URL, serverId = adminMachineIdentifier) {
+    try {
+      const details = await libraryFor(token, plexUrl).itemDetails(ratingKey);
+      if (details.type !== 'episode') return;
+      await localProgress.recordFinishedEpisode(accountId, {
+        grandparentKey: details.grandparentKey,
+        parentKey: details.parentKey,
+        ratingKey: details.ratingKey,
+        grandparentTitle: details.showTitle,
+        librarySectionId: details.librarySectionId,
+      }, serverId);
+    } catch {
+      // Item lookup failed -- skip silently, same as other best-effort spots.
+    }
+  }
+
+  async function scrobbleToPlex(req, ratingKey, action) {
+    const params = new URLSearchParams({
+      key: ratingKey,
+      identifier: 'com.plexapp.plugins.library',
+    });
+    await fetch(`${urlForRequest(req)}/:/${action}?${params}`, { headers: plexHeaders(tokenForRequest(req)), signal: AbortSignal.timeout(5000), redirect: 'error' });
+  }
+
+  async function reportProgress(req, { itemId, timeMs, state, durationMs }) {
+    const finished = localProgress.isFinished(Math.floor(timeMs), Number.isFinite(durationMs) ? Math.floor(durationMs) : 0, serverIdForRequest(req));
+    if (finished) {
+      await scrobbleToPlex(req, itemId, 'scrobble');
+      const accountId = await accountIdForRequest(req);
+      if (accountId) await recordFinishedEpisodeIfApplicable(accountId, itemId, tokenForRequest(req), urlForRequest(req), serverIdForRequest(req));
+      return;
+    }
+    const params = new URLSearchParams({
+      key: itemId,
+      identifier: 'com.plexapp.plugins.library',
+      time: String(Math.floor(timeMs)),
+      state: state === 'stopped' || state === 'paused' ? state : 'playing',
+    });
+    await fetch(`${urlForRequest(req)}/:/progress?${params}`, { headers: plexHeaders(tokenForRequest(req)), signal: AbortSignal.timeout(5000), redirect: 'error' });
+  }
+
+  async function markWatched(req, itemId) {
+    const accountId = await accountIdForRequest(req);
+    if (accountId) await recordFinishedEpisodeIfApplicable(accountId, itemId, tokenForRequest(req), urlForRequest(req), serverIdForRequest(req));
+    await scrobbleToPlex(req, itemId, 'scrobble');
+  }
+
+  async function markUnwatched(req, itemId) {
+    const accountId = await accountIdForRequest(req);
+    if (accountId) {
+      try {
+        const details = await libraryForRequest(req).itemDetails(itemId);
+        await localProgress.clearFinishedEpisodeIfCurrent(accountId, details.grandparentKey, details.ratingKey, serverIdForRequest(req));
+      } catch {
+        // Item lookup failed -- skip silently, same as other best-effort spots.
+      }
+    }
+    await scrobbleToPlex(req, itemId, 'unscrobble');
+  }
+
+  // Combine profile-scoped section hubs with history-derived next-up items.
+  async function continueWatching(req) {
+    const url = urlForRequest(req);
+    const accountId = await accountIdForRequest(req);
+    const hubItems = await libraryForRequest(req).hubContinueWatching();
+    // Without a mapped account, return the profile-token-scoped hub unchanged.
+    if (!accountId) return hubItems;
+
+    const hubKeys = new Set(hubItems.map((i) => i.ratingKey));
+    const personalizedEpisodes = await adminLibraryFor(req, url).continueWatchingForAccount(accountId, {
+      localFinished: await localProgress.finishedEpisodesForAccount(accountId, serverIdForRequest(req)),
+    });
+    const upNext = await authorizedNextUp(personalizedEpisodes, libraryForRequest(req), hubKeys);
+    return [...hubItems, ...upNext];
+  }
+
+  async function sendThumbnail(req, res) {
+    const path = typeof req.query.path === 'string' ? req.query.path : '';
+    if (!path || path.length > 4096) return res.status(400).end();
+    const width = Number(req.query.width || 300);
+    const height = Number(req.query.height || 450);
+    if (![width, height].every(value => Number.isInteger(value) && value >= 1 && value <= 2048)) return res.status(400).end();
+    try {
+      const upstreamUrl = libraryForRequest(req).thumbnailUpstreamUrl(path, width, height);
+      const upstream = await fetch(upstreamUrl, { headers: plexHeaders(tokenForRequest(req)), signal: AbortSignal.timeout(10000), redirect: 'error' });
+      res.status(upstream.status);
+      const type = upstream.headers.get('content-type')?.split(';')[0];
+      if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif'].includes(type)) { await upstream.body?.cancel(); return res.status(502).end(); }
+      res.set('Content-Type', type);
+      if (upstream.body) pipeUpstream(upstream, res);
+      else res.end();
+    } catch {
+      res.status(502).end();
+    }
+  }
+
+  // ---- Sign-in routes -----------------------------------------------------
+
+  // Plex's PIN sign-in and Home profile switching. Registered after core's
+  // session and auth middleware; these paths are public in plex-auth.js.
+  function registerRoutes(app, { rateLimit, endPlayback }) {
+    app.use('/api/auth/plex/pin', rateLimit({ maximum: 10, windowMs: 600000 }));
+    app.use(['/api/auth/plex/select-user', '/api/auth/switch-user'], rateLimit({ maximum: 20, windowMs: 600000 }));
+
+    app.post('/api/auth/plex/pin', async (req, res) => {
+      try {
+        res.json(await plexAuth.createPin(req, res));
+      } catch (err) {
+        res.status(502).json({ error: safeError(err) });
+      }
+    });
+
+    // Poll Plex sign-in status; accounts with multiple Home profiles require selection.
+    app.get('/api/auth/plex/poll', async (req, res) => {
+      const pinId = req.query.id;
+      if (typeof pinId !== 'string' || !/^\d+$/.test(pinId)) return res.status(400).json({ error: 'Valid id required' });
+      try {
+        await plexAuth.withLogin(req, res, pinId, async (consume, login) => {
+          const accountToken = await plexAuth.checkPin(pinId);
+          if (!accountToken) return res.json({ authenticated: false, pending: true });
+          if (SIGN_IN_EMAIL && (await plexAuth.identityForToken(accountToken))?.confirmedEmail !== SIGN_IN_EMAIL) {
+            // Deliberately vague: nothing about which account, or how it is chosen.
+            return res.json({ authenticated: false, pending: false, error: 'This Plex account can\'t sign in to this server.' });
+          }
+
+          const users = await plexAuth.listHomeUsers(accountToken);
+          if (!users.length) throw new Error('Unable to resolve account profiles');
+          if (users.length > 1 || users[0]?.protected) {
+            // The profile picker's next request reads the token back from the encrypted login cookie.
+            login.remember(accountToken);
+            // Place Guest after named profiles in the picker.
+            const sortedUsers = [...users].sort((a, b) => (a.guest === b.guest ? 0 : a.guest ? 1 : -1));
+            return res.json({
+              authenticated: false,
+              pending: false,
+              needsUserSelection: true,
+              pinId,
+              users: sortedUsers.map((u) => ({ id: u.id, title: u.title, thumb: u.thumb, protected: u.protected, admin: u.admin })),
+            });
+          }
+
+          const resolved = await plexAuth.resolveServer(accountToken);
+          if (!resolved.ok) {
+            return res.json({ authenticated: false, pending: false, error: 'This Plex account is not authorized for this server' });
+          }
+          // No Home picker here (single-user account). Use the per-server
+          // accessToken resolveServer found (see plex-auth.js), not the raw
+          // account token -- PMS hub personalization needs the server-scoped
+          // token, not just an account token that merely proves identity.
+          await plexAuth.setSession(res, { accountToken, userToken: resolved.accessToken || accountToken, title: users[0]?.title, thumb: users[0]?.thumb, profileId: users[0]?.id, admin: users[0]?.admin, plexUrl: resolved.plexUrl, machineIdentifier: resolved.machineIdentifier });
+          consume();
+          res.json({ authenticated: true });
+        });
+      } catch (err) {
+        res.status(502).json({ error: safeError(err) });
+      }
+    });
+
+    // Profile identity and display fields come exclusively from Plex.
+    app.post('/api/auth/plex/select-user', async (req, res) => {
+      const { pinId, userId, pin } = req.body || {};
+      if (!pinId || !userId) return res.status(400).json({ error: 'pinId and userId required' });
+      try {
+        await plexAuth.withLogin(req, res, pinId, async (consume, login) => {
+          const accountToken = login.accountToken;
+          if (!accountToken) throw new Error('Sign-in session expired or invalid');
+          const homeUsers = await plexAuth.listHomeUsers(accountToken);
+          const picked = homeUsers.find((u) => u.id === String(userId));
+          if (!picked) throw new Error('Invalid profile');
+          // Same formula as clientIdForRequest -- the device this switch
+          // registers with Plex must match what every later request for this
+          // profile sends, or Plex's hub personalization falls back to
+          // resolving via whichever account actually owns the request's
+          // client identifier. See switchHomeUser's own comment.
+          const switchedToken = await plexAuth.switchHomeUser(accountToken, userId, pin, `${CLIENT_ID}-${picked.id}`);
+          const resolved = await plexAuth.resolveServer(switchedToken);
+          if (!resolved.ok) {
+            return res.json({ authenticated: false, error: 'This Plex account is not authorized for this server' });
+          }
+          // resolved.accessToken is the per-server token Plex.tv's resources
+          // list issues for this profile+server pairing -- not switchedToken
+          // (the account-level token switchHomeUser returns). Confirmed by
+          // direct testing that only the resource-scoped accessToken gets
+          // correctly personalized hub reads from the local PMS; switchedToken
+          // proves identity but local hub endpoints silently fall back to the
+          // server owner's data for it. See plex-auth.js's findServerResource.
+          await plexAuth.setSession(res, { accountToken, userToken: resolved.accessToken || switchedToken, title: picked.title, thumb: picked.thumb, profileId: picked.id, admin: picked.admin, plexUrl: resolved.plexUrl, machineIdentifier: resolved.machineIdentifier });
+          consume();
+          res.json({ authenticated: true });
+        });
+      } catch (err) {
+        res.status(safeError(err) === 'Incorrect PIN' ? 401 : 502).json({ error: safeError(err) });
+      }
+    });
+
+    // Switch Home profiles using the account token carried in the encrypted session cookie.
+    app.get('/api/auth/home-users', async (req, res) => {
+      try {
+        const users = await plexAuth.listHomeUsersForSession(req);
+        const sortedUsers = [...users].sort((a, b) => (a.guest === b.guest ? 0 : a.guest ? 1 : -1));
+        res.json(sortedUsers);
+      } catch (err) {
+        res.status(safeError(err) === 'Not authenticated' ? 401 : 502).json({ error: safeError(err) });
+      }
+    });
+
+    app.post('/api/auth/switch-user', async (req, res) => {
+      const { userId, pin } = req.body || {};
+      if (!userId) return res.status(400).json({ error: 'userId required' });
+      try {
+        await endPlayback(req);
+        await plexAuth.switchUserForSession(req, res, userId, pin);
+        res.json({ ok: true });
+      } catch (err) {
+        const status = safeError(err) === 'Not authenticated' ? 401 : safeError(err) === 'Incorrect PIN' ? 401 : 502;
+        res.status(status).json({ error: safeError(err) });
+      }
+    });
+
+    // Proxy only validated Plex avatar URLs and allowed redirects.
+    app.get('/api/auth/plex/avatar', async (req, res) => {
+      try {
+        const avatar = await fetchAvatar(req.query.url);
+        res.set('Content-Type', avatar.type);
+        res.set('Cache-Control', 'private, max-age=3600');
+        res.send(avatar.body);
+      } catch { res.status(502).end(); }
+    });
+  }
+
+  // ---- Accounts -----------------------------------------------------------
+
+  // Account keys are plex:<plex.tv account ID>; every Home profile shares one.
+  const ACCOUNT_KEY = /^plex:([1-9][0-9]{0,31})$/;
+  const accountView = (accountId, username) => ({
+    key: `plex:${accountId}`,
+    label: username || `Plex account ${accountId}`,
+    detail: `Plex account ${accountId}`,
+  });
+  const accounts = {
+    // Username, exact email or account ID. A bare ID is offered even before
+    // that account has signed in, so a limit can be set ahead of time.
+    async search(query) {
+      // The ID a viewer copies from their watch-time panel is written plex:<ID>.
+      const value = query.trim().replace(/^plex:(?=[1-9][0-9]{0,31}$)/i, '');
+      const found = accountDirectory ? await accountDirectory.search(value) : [];
+      const results = found.map(account => accountView(account.id, account.username));
+      if (/^[1-9][0-9]{0,31}$/.test(value) && !found.some(account => account.id === value)) results.unshift(accountView(value));
+      return results;
+    },
+    async list() {
+      return accountDirectory ? (await accountDirectory.list()).map(account => accountView(account.id, account.username)) : [];
+    },
+    async describe(key) {
+      const accountId = ACCOUNT_KEY.exec(key)?.[1];
+      if (!accountId) return null;
+      return accountView(accountId, (await accountDirectory?.get(accountId).catch(() => null))?.username);
+    },
+  };
+
+  return {
+    id,
+    type: 'plex',
+    name: 'Plex',
+    accounts,
+    // Plex item keys are numeric ratingKeys.
+    isValidId: value => typeof value === 'string' && /^\d+$/.test(value),
+    auth: plexAuth,
+    registerRoutes,
+    library(req) {
+      const lib = libraryForRequest(req);
+      return {
+        libraries: () => lib.libraries(),
+        libraryItems: (libraryId, options) => lib.libraryItems(libraryId, options),
+        recentlyAdded: libraryId => lib.recentlyAdded(libraryId),
+        showSeasons: showId => lib.showSeasons(showId),
+        showEpisodes: showId => lib.showEpisodes(showId),
+        seasonEpisodes: seasonId => lib.seasonEpisodes(seasonId),
+        itemDetails: itemId => lib.itemDetails(itemId),
+        search: query => lib.search(query),
+        continueWatching: () => continueWatching(req),
+      };
+    },
+    sendThumbnail,
+    watchState: { reportProgress, markWatched, markUnwatched, watchedFraction: req => localProgress.finishedThreshold(serverIdForRequest(req)) },
+    playback: {
+      start: startStream,
+      proxy: proxyMedia,
+      stop: stopTranscode,
+      // Whether the browser could fetch media straight from this server.
+      directCapable: req => !!directPlexOrigin(plexAuth.getSessionPlexUrl(req) || PLEX_URL),
+      // The media origin the player page may load from directly, if any.
+      mediaOrigin: req => directTokenForRequest(req) ? urlForRequest(req) : '',
+    },
+    // Plex helpers plugins received before sources existed; kept so older
+    // plugins keep working. New plugins should use sourceFor(req).
+    legacyPluginContext: { plexHeaders, tokenForRequest, urlForRequest, sessionProbeFor, rewriteManifest },
+  };
+}

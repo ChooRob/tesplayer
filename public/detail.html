@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FreeStuffCrazy Player — details</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      background: #111; color: #eee; margin: 0;
+      font-family: -apple-system, system-ui, sans-serif;
+      min-height: 100vh;
+    }
+    #backdrop {
+      position: fixed; inset: 0; z-index: 0;
+      background-size: cover; background-position: center top;
+      filter: brightness(0.35) blur(1px);
+    }
+    #backdropFade {
+      position: fixed; inset: 0; z-index: 0;
+      background: linear-gradient(to top, #111 10%, rgba(17,17,17,0.4) 55%, rgba(17,17,17,0.75));
+    }
+    #back {
+      position: relative; z-index: 1;
+      display: inline-block; margin: 16px;
+      background: rgba(0,0,0,0.5); color: #eee; border: 1px solid #444;
+      border-radius: 8px; padding: 8px 14px; cursor: pointer;
+      text-decoration: none; font-size: 14px;
+    }
+    #content {
+      position: relative; z-index: 1;
+      display: flex; gap: 28px; padding: 10px 32px 40px;
+      max-width: 1100px;
+    }
+    #poster {
+      width: 240px; flex-shrink: 0; border-radius: 10px; overflow: hidden;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+    }
+    #poster img { width: 100%; display: block; }
+    #info { flex: 1; padding-top: 8px; }
+    #title { font-size: 32px; font-weight: 700; margin: 0 0 6px; }
+    #subtitle { font-size: 16px; color: #aaa; margin: 0 0 14px; }
+    #meta { display: flex; gap: 10px; align-items: center; color: #ccc; font-size: 14px; margin-bottom: 18px; flex-wrap: wrap; }
+    #meta span { white-space: nowrap; }
+    .badge {
+      border: 1px solid #666; border-radius: 4px; padding: 2px 7px; font-size: 12px;
+    }
+    #genres { margin-bottom: 16px; color: #999; font-size: 13px; }
+    #summary { font-size: 15px; line-height: 1.6; color: #ddd; max-width: 700px; margin-bottom: 26px; }
+    .buttons { display: flex; gap: 12px; flex-wrap: wrap; }
+    button.cta {
+      display: flex; align-items: center; gap: 8px;
+      border: none; border-radius: 8px; padding: 13px 22px; font-size: 15px; font-weight: 600;
+      cursor: pointer;
+    }
+    .primary { background: #fff; color: #111; }
+    .secondary { background: rgba(255,255,255,0.12); color: #eee; }
+.rating::before { content: ''; display: inline-block; width: 1em; height: 1em; margin-right: 3px; vertical-align: -0.12em; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23f5c518' d='M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z'/%3E%3C/svg%3E") center / contain no-repeat; }
+    #loading { position: relative; z-index: 1; padding: 40px; color: #888; }
+
+    @media (max-width: 700px) {
+      #content { flex-direction: column; gap: 18px; padding: 10px 16px 32px; }
+      #poster { width: 45vw; max-width: 220px; margin: 0 auto; }
+      #info { padding-top: 0; }
+      #title { font-size: 24px; }
+      #summary { max-width: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="backdrop"></div>
+  <div id="backdropFade"></div>
+  <a id="back" href="/browse"><span data-icon="arrow-left"></span> Back</a>
+  <div id="loading">Loading…</div>
+  <div id="content" style="display:none">
+    <div id="poster"><img id="posterImg" /></div>
+    <div id="info">
+      <h1 id="title"></h1>
+      <div id="subtitle"></div>
+      <div id="meta"></div>
+      <div id="genres"></div>
+      <div id="summary"></div>
+      <div class="buttons">
+        <button class="cta primary" id="playBtn"><span data-icon="play"></span> Play</button>
+        <button class="cta secondary" id="watchedBtn"><span data-icon="check"></span> Mark Watched</button>
+        <button class="cta secondary" id="unwatchedBtn"><span data-icon="back"></span> Mark Unwatched</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { renderMetadata } from "/metadata.js";
+    import { hydrateIcons, iconEl } from "/icons.js";
+    hydrateIcons();
+    const fmtTime = (s) => {
+      s = Math.max(0, Math.floor(s || 0));
+      const m = String(Math.floor(s / 60)).padStart(2, '0');
+      const sec = String(s % 60).padStart(2, '0');
+      return `${m}:${sec}`;
+    };
+
+    // Set before loading so Back still works when the item fails to load.
+    const returnTab = new URLSearchParams(location.search).get('tab');
+    document.getElementById('back').href = `/browse${returnTab ? `?tab=${encodeURIComponent(returnTab)}` : ''}`;
+
+    async function main() {
+      const params = new URLSearchParams(location.search);
+      const key = params.get('key');
+      const res = await fetch(`/api/library/item/${key}`);
+      if (!res.ok) throw new Error(`${res.status}`);
+      const item = await res.json();
+
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('content').style.display = 'flex';
+
+      if (item.backdrop) {
+        document.getElementById('backdrop').style.backgroundImage = `url(${item.backdrop})`;
+      }
+      document.getElementById('posterImg').src = item.thumbnail || '';
+
+      const isEpisode = item.type === 'episode';
+      document.getElementById('title').textContent = isEpisode
+        ? item.title
+        : item.title;
+      document.getElementById('subtitle').textContent = isEpisode
+        ? `${item.showTitle || ''} ${item.season != null ? '· S' + item.season : ''}${item.episode != null ? 'E' + item.episode : ''}`.trim()
+        : '';
+
+      const metaEl = document.getElementById('meta');
+      renderMetadata(metaEl, item, { duration: true });
+
+      document.getElementById('genres').textContent = (item.genres || []).join(' · ');
+      document.getElementById('summary').textContent = item.summary || '';
+
+      document.getElementById('playBtn').addEventListener('click', () => {
+        const playParams = new URLSearchParams({ key: item.ratingKey });
+        const tab = params.get('tab');
+        if (tab) playParams.set('tab', tab);
+        window.location.href = `/canvas2?${playParams}`;
+      });
+      document.getElementById('watchedBtn').addEventListener('click', async (ev) => {
+        ev.target.textContent = 'Marking…';
+        await fetch(`/api/library/watched/${encodeURIComponent(item.ratingKey)}`, { method: 'POST' }).catch(() => {});
+        ev.currentTarget.replaceChildren(iconEl('check'), ' Marked Watched');
+      });
+      document.getElementById('unwatchedBtn').addEventListener('click', async (ev) => {
+        ev.target.textContent = 'Marking…';
+        await fetch(`/api/library/unwatched/${encodeURIComponent(item.ratingKey)}`, { method: 'POST' }).catch(() => {});
+        ev.currentTarget.replaceChildren(iconEl('back'), ' Marked Unwatched');
+      });
+    }
+
+    main().catch((err) => {
+      document.getElementById('loading').textContent = `Failed to load: ${err.message}`;
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,1567 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FreeStuffCrazy Player</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    canvas, #standardVideo {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      object-fit: contain;
+      background: #000;
+    }
+    [hidden] { display: none !important; }
+    #settingsBtn { margin-left: auto; }
+    #playbackSettings {
+      color: #fff; background: #202126; border: 1px solid #45464c;
+      border-radius: 16px; padding: 24px; width: min(420px, calc(100vw - 32px));
+      font-family: -apple-system, system-ui, sans-serif;
+    }
+    #playbackSettings::backdrop { background: rgba(0,0,0,.6); }
+    #playbackSettings h2 { margin: 0 0 18px; font-size: 21px; }
+    /* Each setting is one block: its label, its control, then what it means. */
+    #playbackSettings .field { padding-top: 18px; margin-top: 18px; border-top: 1px solid #3a3b42; }
+    #playbackSettings .field:first-of-type { padding-top: 0; margin-top: 0; border-top: 0; }
+    #playbackSettings label, #playbackSettings h3 { display: block; margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+    #playbackSettings .status { margin: 10px 0 0; font-size: 14px; color: #fff; }
+    #playbackSettings .hint { margin: 6px 0 0; font-size: 13px; color: #a3a3ad; }
+    #playbackSettings .note { margin: 18px 0 0; font-size: 12px; color: #8b8b95; }
+    #playbackSettings p:empty { display: none; }
+    #playbackSettings select { width: 100%; padding: 12px; font-size: 16px; color: white; background: #303138; border: 1px solid #777; border-radius: 8px; }
+    #playbackSettings [hidden], #nextActions [hidden] { display: none; }
+    #nextActions {
+      position: fixed; right: 20px; bottom: 112px; z-index: 4;
+      display: flex; align-items: center; gap: 10px; pointer-events: none;
+    }
+    #nextActions button {
+      display: flex; align-items: center; gap: 8px;
+      min-height: 52px; padding: 0 22px; border: 0; border-radius: 10px;
+      color: #fff; font: 600 17px -apple-system, system-ui, sans-serif;
+      box-shadow: 0 4px 16px rgba(0,0,0,.5); cursor: pointer; pointer-events: auto;
+    }
+    #playNextBtn { background: #0878e6; font-variant-numeric: tabular-nums; }
+    /* While counting down, hold the width so the shrinking number cannot nudge the buttons. */
+    #playNextBtn.counting span:first-child { min-width: 16ch; }
+    #playNextBtn:active { background: #0668c8; }
+    #cancelNextBtn { background: #41434c; }
+    #cancelNextBtn:active { background: #565963; }
+    #playNextBtn svg { width: 24px; height: 24px; fill: currentColor; }
+    #playbackSettings p { line-height: 1.45; }
+    #settingsError { margin: 10px 0 0; font-size: 14px; color: #ffbdad; }
+    .settingsActions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 22px; }
+    .settingsActions button { min-height: 44px; padding: 10px 18px; border: 0; border-radius: 8px; color: white; background: #41434c; font-size: 15px; cursor: pointer; }
+    #applyPlayback { background: #0878e6; }
+    #dimLayer { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; }
+    #controls { position: relative; }
+    /* The picture's size and position are set from the player bar's picture panel. */
+    canvas, #standardVideo, #stillImage {
+      transform: translate(calc(var(--pic-x, 0) * 100vw), calc(var(--pic-y, 0) * 100vh)) scale(var(--pic-scale, 1));
+    }
+    /* While moving, the overlay lets drags through to the picture; the bars still take taps. */
+    html.moving, html.moving body { touch-action: none; }
+    html.moving canvas, html.moving #standardVideo, html.moving #stillImage { cursor: move; }
+    html.moving #overlay { pointer-events: none; }
+    html.moving #topBar, html.moving #controls { pointer-events: auto; }
+    #dimPanel {
+      position: absolute; right: 20px; bottom: calc(100% - 8px);
+      display: flex; flex-direction: column; gap: 10px;
+      width: min(380px, calc(100vw - 40px)); padding: 12px 16px;
+      color: #fff; background: rgba(32,33,38,.95); border: 1px solid #45464c; border-radius: 12px;
+      font-family: -apple-system, system-ui, sans-serif;
+    }
+    .pictureRow { display: flex; align-items: center; gap: 14px; }
+    .pictureRow label { width: 3em; font-size: 14px; }
+    #dimPanel input { flex: 1; min-width: 0; height: 32px; accent-color: #0a84ff; cursor: pointer; }
+    .pictureValue { min-width: 3.2em; text-align: right; font-size: 14px; font-weight: 600; }
+    #controls #dimPanel button { width: auto; height: 44px; padding: 0 16px; font-size: 15px; flex: 1; }
+    #controls #dimPanel button[aria-pressed="true"] { background: #0878e6; }
+    #controls #dimPanel button:disabled { opacity: .45; cursor: default; }
+    #dimBtn[aria-expanded="true"] { background: rgba(255,255,255,.3) !important; }
+    #soundSection[hidden] { display: none; }
+    #soundSection button { min-height: 44px; padding: 10px 18px; border: 0; border-radius: 8px; color: white; background: #41434c; font-size: 15px; cursor: pointer; }
+    #soundSection button:disabled { opacity: .45; cursor: default; }
+    #applyPlayback:disabled { opacity: .45; cursor: default; }
+    #stillImage {
+      display: none;
+      width: 100vw;
+      height: 100vh;
+      object-fit: contain;
+      background: #000;
+    }
+
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      opacity: 1;
+      transition: opacity 0.4s ease;
+      pointer-events: none;
+    }
+    #overlay.visible { pointer-events: auto; }
+
+    #debug {
+      display: none; /* dev-only -- log() below still writes every message to the console */
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      color: #0f0;
+      font-family: monospace;
+      font-size: 11px;
+      white-space: pre;
+      text-shadow: 0 0 3px #000;
+    }
+
+    #controls {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 16px 20px 24px;
+      background: linear-gradient(to top, rgba(0,0,0,0.75), rgba(0,0,0,0));
+    }
+    #controls button {
+      background: rgba(255,255,255,0.12);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      width: 44px;
+      height: 44px;
+      font-size: 18px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    #controls button:active { background: rgba(255,255,255,0.25); }
+    #controls .ico { width: 28px; height: 28px; }
+    #playPauseBtn { width: 52px; height: 52px; font-size: 22px; }
+    #playPauseBtn .spinner {
+      display: inline-block;
+      width: 22px;
+      height: 22px;
+      box-sizing: border-box;
+      border: 3px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      vertical-align: middle;
+      animation: playSpin 0.8s linear infinite;
+    }
+    @keyframes playSpin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { #playPauseBtn .spinner { animation-duration: 2s; } }
+
+    #seekBar { flex: 1; accent-color: #0a84ff; height: 24px; cursor: pointer; }
+    #timeLabel { color: #fff; font-family: monospace; font-size: 13px; flex-shrink: 0; font-weight: 600; letter-spacing: 0.5px; white-space: nowrap; }
+    #timeLabel.live-indicator {
+      /* Centers the red dot and the word on one line, at the height of the buttons. */
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      min-height: 44px;
+      font-size: 15px;
+      width: auto;
+      padding: 0 14px;
+      font-family: -apple-system, system-ui, sans-serif;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      border-radius: 8px;
+    }
+    #timeLabel.live-indicator .ico { width: 20px; height: 20px; vertical-align: 0; }
+    #timeLabel.live-active { color: #ff3b30; background: rgba(255,255,255,0.12); }
+    #timeLabel.live-paused { color: #ffcc00; background: rgba(255,255,255,0.12); }
+
+    #resumeBanner {
+      position: fixed;
+      top: 72px;
+      max-width: calc(100vw - 32px);
+      visibility: hidden;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(10,132,255,0.92);
+      color: #fff;
+      font-family: -apple-system, system-ui, sans-serif;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 10px 18px;
+      border-radius: 10px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.4s ease;
+      z-index: 2;
+    }
+    #resumeBanner.visible { opacity: 1; visibility: visible; }
+    #resumeBanner.visible.clickable { pointer-events: auto; cursor: pointer; }
+
+    #audioUnlockBtn {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 3;
+      background: #0a84ff;
+      color: #fff;
+      border: none;
+      border-radius: 14px;
+      padding: 20px 32px;
+      font-family: -apple-system, system-ui, sans-serif;
+      font-size: 20px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    }
+
+    #topBar {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      right: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      z-index: 3;
+    }
+    #backLink {
+      color: #fff;
+      text-decoration: none;
+      font-family: -apple-system, system-ui, sans-serif;
+      font-size: 14px;
+      background: rgba(0,0,0,0.5);
+      padding: 8px 14px;
+      border-radius: 8px;
+    }
+    #titleDisplay {
+      flex: 1;
+      min-width: 0;
+      text-align: center;
+      align-self: center;
+      color: #fff;
+      font-family: -apple-system, system-ui, sans-serif;
+      font-size: 15px;
+      font-weight: 600;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.8);
+      padding: 0 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #topBarRight { display: flex; gap: 8px; align-items: center; }
+    #watchedControls { display: flex; gap: 8px; }
+    #topBarRight button, #watchedControls button {
+      color: #fff;
+      font-family: -apple-system, system-ui, sans-serif;
+      font-size: 13px;
+      background: rgba(0,0,0,0.5);
+      border: none;
+      padding: 8px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    #topBarRight button:active, #watchedControls button:active { background: rgba(255,255,255,0.2); }
+    /* Only shown when a quota plugin reports remaining watch time. */
+    #quotaLabel {
+      display: none;
+      color: #ccc;
+      font-family: -apple-system, system-ui, sans-serif;
+      font-size: 12px;
+      background: rgba(0,0,0,0.5);
+      padding: 8px 14px;
+      border-radius: 8px;
+      white-space: nowrap;
+    }
+    #quotaLabel.quota-low { color: #ffcc00; }
+
+    /* Phones: keep the top bar on one line and clear of notches. */
+    #topBar { top: max(16px, env(safe-area-inset-top)); left: max(16px, env(safe-area-inset-left)); right: max(16px, env(safe-area-inset-right)); }
+    @media (max-width: 600px) {
+      #topBar { gap: 6px; align-items: center; }
+      #backLink, #topBarRight button, #watchedControls button {
+        min-width: 44px; min-height: 44px; padding: 0 10px; font-size: 18px;
+        display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+      }
+      #topBarRight, #watchedControls { gap: 6px; }
+      #titleDisplay { font-size: 14px; padding: 0 4px; }
+      .shortLabel .label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+      #quotaLabel { padding: 6px 8px; font-size: 11px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="debug">loading…</div>
+  <canvas id="canvas" hidden></canvas>
+  <video crossorigin="anonymous" id="standardVideo" playsinline preload="auto" hidden></video>
+  <img id="stillImage" alt="Placeholder image" />
+  <div id="dimLayer" aria-hidden="true"></div>
+  <div id="resumeBanner"></div>
+  <button id="audioUnlockBtn" style="display:none"><span data-icon="volume"></span> Tap to enable sound</button>
+
+  <div id="overlay" class="visible">
+    <div id="topBar">
+      <a id="backLink" class="shortLabel" href="/browse" aria-label="Browse"><span data-icon="arrow-left"></span><span class="label">&nbsp;Browse</span></a>
+      <div id="titleDisplay"></div>
+      <div id="topBarRight">
+        <span id="quotaLabel"></span>
+        <button id="fullscreenBtn" style="display:none" title="Hide the browser's own chrome">Fullscreen</button>
+        <div id="watchedControls">
+          <button id="markWatchedBtn" class="shortLabel" aria-label="Mark watched" title="Mark watched"><span data-icon="check"></span><span class="label">&nbsp;Mark Watched</span></button>
+          <button id="markUnwatchedBtn" class="shortLabel" aria-label="Mark unwatched" title="Mark unwatched"><span data-icon="back"></span><span class="label">&nbsp;Mark Unwatched</span></button>
+        </div>
+      </div>
+    </div>
+    <div id="controls">
+      <button id="back30" title="Back 30s" aria-label="Back 30 seconds"><span data-icon="back" data-label="30"></span></button>
+      <button id="playPauseBtn" title="Play/Pause" aria-busy="true"><span class="spinner" role="status" aria-label="Loading"></span></button>
+      <button id="fwd30" title="Forward 30s" aria-label="Forward 30 seconds"><span data-icon="forward" data-label="30"></span></button>
+      <input id="seekBar" type="range" min="0" max="0" value="0" step="1" />
+      <span id="timeLabel">00:00 / 00:00</span>
+      <div id="dimPanel" role="group" aria-label="Adjustments" hidden>
+        <div class="pictureRow">
+          <label for="dimLevel">Dim</label>
+          <input id="dimLevel" type="range" min="0" max="100" step="5" value="0" aria-describedby="dimValue">
+          <span id="dimValue" class="pictureValue">Off</span>
+        </div>
+        <div class="pictureRow">
+          <label for="volumeLevel">Volume</label>
+          <input id="volumeLevel" type="range" min="0" max="400" step="5" value="100" aria-describedby="volumeValue">
+          <span id="volumeValue" class="pictureValue">100%</span>
+        </div>
+        <div class="pictureRow">
+          <label for="sizeLevel">Size</label>
+          <input id="sizeLevel" type="range" min="40" max="100" step="5" value="100" aria-describedby="sizeValue">
+          <span id="sizeValue" class="pictureValue">100%</span>
+        </div>
+        <div class="pictureRow">
+          <button id="moveBtn" type="button" aria-pressed="false" title="Drag the picture to move it"><span data-icon="move"></span> Move</button>
+          <button id="resetPicture" type="button">Reset</button>
+        </div>
+      </div>
+      <button id="dimBtn" title="Adjust sound and picture" aria-label="Adjustments" aria-expanded="false" aria-controls="dimPanel"><span data-icon="tune"></span></button>
+      <button id="settingsBtn" title="Playback settings" aria-label="Playback settings" aria-haspopup="dialog" aria-controls="playbackSettings"><span data-icon="gear"></span></button>
+    </div>
+  </div>
+
+  <!-- Floats over the video, outside the overlay so it stays up when the controls fade. -->
+  <div id="nextActions">
+    <button id="cancelNextBtn" hidden aria-label="Cancel Play Next">Cancel</button>
+    <button id="playNextBtn" hidden aria-label="Play next episode" title="Play next episode"><span>Play Next</span><span data-icon="arrow-right"></span></button>
+  </div>
+
+  <dialog id="playbackSettings" aria-labelledby="settingsTitle">
+    <h2 id="settingsTitle">Playback settings</h2>
+    <section class="field">
+      <label for="playbackType">Playback type</label>
+      <select id="playbackType" aria-describedby="modeDescription activePlayback settingsError">
+        <option value="canvas">Canvas (default)</option>
+        <option value="standard">Standard</option>
+      </select>
+      <p class="status" id="activePlayback"></p>
+      <p class="hint" id="modeDescription"></p>
+      <p id="settingsError" role="status"></p>
+    </section>
+    <section class="field">
+      <label for="playbackQuality" id="qualityLabel">Quality</label>
+      <select id="playbackQuality" aria-describedby="qualityStatus qualityDescription">
+        <option value="auto">Auto</option>
+        <option value="ultra">Ultra</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+      <p class="status" id="qualityStatus"></p>
+      <p class="hint" id="qualityDescription"></p>
+    </section>
+    <section class="field" id="soundSection" hidden>
+      <h3>Sound</h3>
+      <button id="restartSound" type="button"><span data-icon="volume"></span> Restart sound</button>
+      <p class="hint">No sound, though the video plays? This rebuilds the audio output and keeps your place.</p>
+    </section>
+    <div class="settingsActions">
+      <button id="cancelSettings" type="button">Cancel</button>
+      <button id="applyPlayback" type="button">Apply</button>
+    </div>
+    <p class="note">Applies to this browser. Changing playback type or quality reloads the player; live streams rejoin live.</p>
+    <p class="note"><a href="/licenses" target="_blank" rel="noopener" style="color:#8dc9ff">Software licenses</a></p>
+  </dialog>
+
+  <script type="module">
+    import { Player } from '/engine/player.js';
+    import { StandardPlayer } from '/engine/standard-player.js';
+    import { PLAYBACK_MODES, PLAYBACK_STORAGE_KEY, readPlaybackMode, canvasSupport, choosePlaybackMode, isHandheld } from '/engine/playback-mode.js';
+    import { QUALITY_LEVELS } from '/engine/quality-tiers.js';
+    import { measureStartupQuality } from '/engine/startup-quality.js';
+    import { QUALITY_STORAGE_KEY, describeQuality, readQualityPreference } from '/engine/quality-preference.js';
+    import { setupFullscreenButton } from '/fullscreen.js';
+    import { hydrateIcons, iconEl, iconSvg } from '/icons.js';
+    import { CENTERED, normalizePicture, readPicture, savePicture } from '/picture-layout.js';
+    import { normalizeVolume, readVolume, saveVolume } from '/volume-level.js';
+    import { waitForServer } from '/engine/server-wait.js';
+    hydrateIcons();
+    import { createQuotaGuard } from '/engine/quota-guard.js';
+    import { createPlaybackBanner } from '/playback-banner.js';
+    import { createNextCountdown } from '/engine/next-countdown.js';
+    import { createMediaSession } from '/media-session.js';
+
+    fetch('/api/plugin/frontend').then(res => res.ok ? res.json() : null).then(async assets => {
+      for (const script of assets?.playerScripts || []) {
+        const url = new URL(script, location.origin);
+        if (url.origin === location.origin) await import(url.href);
+      }
+    }).catch(() => console.error('Could not load player extensions'));
+
+    setupFullscreenButton(document.getElementById('fullscreenBtn'), {
+      video: document.getElementById('standardVideo'),
+      getPlaybackState: () => {
+        const player = window.__player;
+        if (!player || player.state === 'idle' || player.state === 'loading' || player.state === 'error') return null;
+        return { currentTime: player.clock.currentTime, paused: player.state === 'paused' };
+      },
+    });
+
+    const debugEl = document.getElementById('debug');
+    const log = (msg) => {
+      console.log(msg);
+      debugEl.textContent = msg;
+    };
+    window.onerror = (msg, src, line, col) => log(`WINDOW ERROR: ${msg} @ ${line}:${col}`);
+    window.addEventListener('unhandledrejection', (ev) => {
+      log(`UNHANDLED REJECTION: ${ev.reason?.stack || ev.reason}`);
+    });
+
+    const fmtTime = (s) => {
+      s = Math.max(0, Math.floor(s || 0));
+      const m = String(Math.floor(s / 60)).padStart(2, '0');
+      const sec = String(s % 60).padStart(2, '0');
+      return `${m}:${sec}`;
+    };
+
+    // --- Overlay fade-after-inactivity ------------------------------------
+    const overlay = document.getElementById('overlay');
+    const FADE_DELAY_MS = 5000;
+    let fadeTimer = null;
+    let overlayPinned = false; // kept visible while paused/buffering
+
+    function showOverlay() {
+      overlay.classList.add('visible');
+      overlay.style.opacity = '1';
+      scheduleFade();
+    }
+    function scheduleFade() {
+      clearTimeout(fadeTimer);
+      if (overlayPinned || document.getElementById('playbackSettings').open || !document.getElementById('dimPanel').hidden) return;
+      fadeTimer = setTimeout(() => {
+        overlay.style.opacity = '0';
+        overlay.classList.remove('visible');
+      }, FADE_DELAY_MS);
+    }
+    for (const evt of ['pointermove', 'pointerdown', 'touchstart', 'keydown']) {
+      window.addEventListener(evt, showOverlay, { passive: true });
+    }
+
+    async function main() {
+      log(`crossOriginIsolated=${window.crossOriginIsolated}`);
+      const canvas = document.getElementById('canvas');
+      const video = document.getElementById('standardVideo');
+      const urlParams = new URLSearchParams(location.search);
+      let storage;
+      try { storage = localStorage; } catch {}
+      const isLive = urlParams.get('live') === '1';
+      // randomUUID exists only on secure pages; getRandomValues works everywhere.
+      const playbackId = crypto.randomUUID?.()
+        ?? Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+      let reportPlaybackState = () => {};
+      let quotaRemainingSeconds = null;
+      let directAttempt = false;
+      let directCapablePromise = Promise.resolve(false);
+      let vodLoading = true;
+      let playbackRegistered = false;
+      function fallbackToProxy() {
+        if (!directAttempt) return;
+        directAttempt = false;
+        const target = new URL(location.href);
+        target.searchParams.set('delivery', 'proxy');
+        target.searchParams.set('resume', String(player.clock.currentTime || Number(urlParams.get('resume')) || 0));
+        target.searchParams.set('paused', player.state === 'paused' ? '1' : '0');
+        location.replace(target.href);
+      }
+
+      // Reload in place at the given quality, preserving position and pause
+      // state -- the shared mechanic behind every recovery path below and
+      // fallbackToProxy above. Reloading always hits /api/start fresh, which
+      // is also how a stalled Plex transcode session gets restarted.
+      // Reloading the page while the server restarts would land on the browser's
+      // "site can't be reached" page, so wait until the server answers first.
+      async function reloadPlayback(quality, { recovery = false } = {}) {
+        const target = new URL(location.href);
+        target.searchParams.set('quality', quality);
+        // When it happened, so only a failure soon after this reload counts
+        // as the retry failing (see recentlyRecovered).
+        if (recovery) target.searchParams.set('recovery', String(Date.now()));
+        target.searchParams.set('resume', String(player.clock.currentTime || Number(urlParams.get('resume')) || 0));
+        target.searchParams.set('paused', player.state === 'paused' ? '1' : '0');
+        // A weak connection can stay down for minutes, so keep waiting rather than
+        // giving up. If the stream recovers on its own meanwhile, drop the banner
+        // and keep playing instead of reloading a stream that works.
+        const startedAt = player.clock.currentTime;
+        const resumedOnItsOwn = () => player.state === 'playing' && player.clock.currentTime > startedAt + 2;
+        let server;
+        do {
+          server = await waitForServer({ cancelled: () => leaving || resumedOnItsOwn() });
+          if (server === 'timeout') showBanner('No connection. Waiting to reconnect…', { persist: true });
+        } while (server === 'timeout');
+        if (leaving) return;
+        if (server === 'cancelled') {
+          hideBanner();
+          downgrading = false;
+          return;
+        }
+        location.replace(target.href);
+      }
+
+      // An on-demand stream that fails after it started -- typically because
+      // the media server ended its transcode session during a long pause --
+      // is restarted at the current position. Direct-from-Plex playback first
+      // falls back to the relay instead.
+      // Set once the page starts navigating away, so a request cut off by
+      // leaving is never treated as a failure to recover from.
+      let leaving = false;
+      window.addEventListener('beforeunload', () => { leaving = true; });
+      function recoverFromError() {
+        if (leaving) return;
+        if (directAttempt) return fallbackToProxy();
+        if (recentlyRecovered()) {
+          showBanner('Playback stopped. Leave and reopen the player to retry.', { persist: true });
+          return;
+        }
+        showBanner('Reconnecting…', { persist: true });
+        reloadPlayback(currentQuality, { recovery: true });
+      }
+
+      const READ_AHEAD_SECONDS = { low: 60, medium: 30, high: 0 };
+
+      // A tier in the address wins (recovery and quality-change reloads), then the
+      // viewer's own setting. Only Auto measures the connection at the start.
+      const preferredQuality = readQualityPreference(storage);
+      const requestedQuality = urlParams.get('quality') ?? (preferredQuality === 'auto' ? null : preferredQuality);
+      const hasQualityOverride = QUALITY_LEVELS.includes(requestedQuality);
+      let currentQuality = hasQualityOverride ? requestedQuality : 'high';
+      function downgradeQuality() {
+        const next = QUALITY_LEVELS[QUALITY_LEVELS.indexOf(currentQuality) + 1];
+        if (!next) return false; // already at the lowest tier
+        showBanner(`Playback is struggling — lowering quality to ${next}…`, { persist: true });
+        reloadPlayback(next);
+        return true;
+      }
+
+      let downgrading = false;
+
+      // Stall watchdog: if the presentation clock makes no progress for a
+      // while despite the player believing it's playing, the stream is
+      // stuck (typically a network stall, not a decode bottleneck -- it
+      // doesn't show up as dropped frames since nothing got decoded to
+      // drop). Applies to both playback modes. Steps quality down first
+      // (smaller segments recover faster over a weak connection); once
+      // already at the lowest tier, just restarts the stream in place.
+      const STALL_TIMEOUT_MS = currentQuality === 'ultra' ? 10000 : 20000;
+      // Recovery reloads at most once per failure: a page that was itself a
+      // recovery within this window stops and asks the viewer instead of
+      // looping. A failure long after a recovery (say, after another long
+      // pause) gets its own retry. An old-style recovery=1 counts as recent.
+      const RECOVERY_WINDOW_MS = 120000;
+      function recentlyRecovered() {
+        if (!urlParams.has('recovery')) return false;
+        const at = Number(urlParams.get('recovery'));
+        return !(at > 1) || Date.now() - at < RECOVERY_WINDOW_MS;
+      }
+      let lastMediaTime = -1;
+      let lastProgressAt = performance.now();
+      let playbackStarted = false;
+      function watchForStall(stats) {
+        if (downgrading || typeof stats.mediaTime !== 'number') return;
+        const now = performance.now();
+        if (stats.state === 'playing') playbackStarted = true;
+        // Building the initial audio cushion can take longer than the stall
+        // timeout. Reloading here discards the buffer and starts a loop.
+        if (stats.state === 'buffering' && !playbackStarted) { lastProgressAt = now; return; }
+        // 'buffering' is the stall itself (both players stop the clock while
+        // in it) -- only paused/loading/idle/ended/error are legitimate
+        // reasons the clock isn't moving.
+        if (stats.state !== 'playing' && stats.state !== 'buffering') { lastProgressAt = now; return; }
+        if (stats.mediaTime !== lastMediaTime) {
+          lastMediaTime = stats.mediaTime;
+          lastProgressAt = now;
+          return;
+        }
+        if (now - lastProgressAt < STALL_TIMEOUT_MS) return;
+        downgrading = true;
+        if (!downgradeQuality()) {
+          // Live already reconnects on its own when the stream drops.
+          if (isLive) { downgrading = false; lastProgressAt = now; return; }
+          if (recentlyRecovered()) {
+            showBanner('Playback is stalled. Leave and reopen the player to retry.', { persist: true });
+            return;
+          }
+          showBanner('Playback stalled — reconnecting…', { persist: true });
+          reloadPlayback(currentQuality, { recovery: true });
+        }
+      }
+
+      // Sample the Canvas player's dropped-frame rate roughly once a second;
+      // a sustained high drop rate means the device can't decode fast enough
+      // at the current quality, not just a brief hiccup.
+      const DROP_RATE_SAMPLE_MS = 1000;
+      const DROP_RATE_THRESHOLD = 2; // dropped frames/sec sustained
+      const STRUGGLE_DURATION_MS = 6000;
+      let lastDropSampleAt = performance.now();
+      let lastDropCount = 0;
+      let strugglingSince = null;
+      let audioBufferWindowStart = performance.now();
+      let lastAudioHealthTick = audioBufferWindowStart;
+      let audioBufferingMs = 0;
+      function watchPlaybackHealth(stats) {
+        if (streamLimitHandled) return;
+        watchForStall(stats);
+        if (isLive || downgrading || typeof stats.videoDropCount !== 'number') return;
+        const now = performance.now();
+        if (now - audioBufferWindowStart >= 30000) {
+          audioBufferWindowStart = now;
+          audioBufferingMs = 0;
+        }
+        if (playbackStarted && stats.state === 'buffering' && stats.audioAvailableSeconds < 2) {
+          audioBufferingMs += Math.min(1000, now - lastAudioHealthTick);
+          if (audioBufferingMs >= 8000) {
+            downgrading = downgradeQuality();
+            if (downgrading) return;
+            audioBufferingMs = 0;
+          }
+        }
+        lastAudioHealthTick = now;
+        const elapsedMs = now - lastDropSampleAt;
+        if (elapsedMs < DROP_RATE_SAMPLE_MS) return;
+        const dropRate = (stats.videoDropCount - lastDropCount) / (elapsedMs / 1000);
+        lastDropCount = stats.videoDropCount;
+        lastDropSampleAt = now;
+        if (dropRate < DROP_RATE_THRESHOLD) { strugglingSince = null; return; }
+        strugglingSince ??= now;
+        if (now - strugglingSince >= STRUGGLE_DURATION_MS) {
+          downgrading = downgradeQuality();
+        }
+      }
+
+      // Reload the originating browse tab to refresh its content after playback.
+      const returnTab = urlParams.get('tab');
+      const returnUrl = `/browse${returnTab ? `?tab=${encodeURIComponent(returnTab)}` : ''}`;
+      const backLinkEl = document.getElementById('backLink');
+      backLinkEl.href = returnUrl;
+      backLinkEl.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        location.replace(returnUrl);
+      });
+      let player;
+      const stillImage = document.getElementById('stillImage');
+      const seekBar = document.getElementById('seekBar');
+      const timeLabel = document.getElementById('timeLabel');
+      const playPauseBtn = document.getElementById('playPauseBtn');
+      // Inline SVG, not glyphs: the car browser has no font for the symbols.
+      const ICON_PLAY = iconSvg('play');
+      const ICON_PAUSE = iconSvg('pause');
+      // Spinner while the player is loading or rebuffering, else play/pause glyph.
+      function renderPlayPause(state) {
+        const busy = state === 'loading' || state === 'buffering';
+        playPauseBtn.setAttribute('aria-busy', busy ? 'true' : 'false');
+        playPauseBtn.innerHTML = busy
+          ? '<span class="spinner" role="status" aria-label="Loading"></span>'
+          : state === 'playing' ? ICON_PAUSE : ICON_PLAY;
+      }
+      let userScrubbing = false;
+
+      function setPinned(pinned) {
+        overlayPinned = pinned;
+        if (pinned) showOverlay();
+        else scheduleFade();
+      }
+
+      const preference = PLAYBACK_MODES.includes(urlParams.get('playback'))
+        ? urlParams.get('playback') : readPlaybackMode(storage, { handheld: isHandheld() });
+      const support = {
+        canvasError: canvasSupport(),
+        standardSupported: StandardPlayer.supports({ video, live: isLive }),
+        secure: window.isSecureContext,
+      };
+      const selection = choosePlaybackMode(preference, support);
+      // Direct Plex delivery is only supported by Standard playback.
+      directAttempt = selection.mode === 'standard' && !isLive && urlParams.get('delivery') !== 'proxy';
+      if (directAttempt && !selection.error) {
+        directCapablePromise = fetch('/api/playback/direct-capable')
+          .then((r) => (r.ok ? r.json() : { capable: false }))
+          .then((d) => !!d.capable).catch(() => false);
+      }
+      const dialog = document.getElementById('playbackSettings');
+      const select = document.getElementById('playbackType');
+      const qualitySelect = document.getElementById('playbackQuality');
+      const apply = document.getElementById('applyPlayback');
+      if (!support.secure) {
+        const canvasOption = select.querySelector('option[value="canvas"]');
+        canvasOption.disabled = true;
+        canvasOption.textContent = 'Canvas (needs HTTPS)';
+      }
+      const descriptions = {
+        standard: 'Browser-managed video. Best for tablets, phones and computers.',
+        canvas: 'Made for Tesla and devices that need it. Uses more battery and memory.',
+      };
+      function describeMode() {
+        const proposed = choosePlaybackMode(select.value, support);
+        document.getElementById('modeDescription').textContent = descriptions[select.value];
+        document.getElementById('settingsError').textContent = proposed.error;
+        document.getElementById('qualityStatus').textContent = describeQuality({ current: currentQuality, preference: preferredQuality });
+        document.getElementById('qualityDescription').textContent = qualitySelect.value === 'auto'
+          ? 'Picks High or lower from your connection, and steps down if playback struggles.'
+          : qualitySelect.value === 'ultra'
+            ? 'Up to 1080p at 60 fps. Needs a fast connection and newer hardware.'
+            : 'Stays at this quality unless playback keeps stalling.';
+        apply.disabled = !!proposed.error;
+      }
+      document.getElementById('activePlayback').textContent = selection.error
+        ? 'Playback unavailable with the current setting.'
+        : `Now: ${selection.mode === 'canvas' ? 'Canvas' : 'Standard'}`;
+      // The picture button beside the gear opens a panel for dimming, size and
+      // position. Everything applies at once and is remembered for this browser,
+      // and the controls stay up while the panel is open. Dimming is a black layer
+      // over the video, so the controls stay bright.
+      const DIM_KEY = 'videoDim';
+      const dimLayer = document.getElementById('dimLayer');
+      const dimInput = document.getElementById('dimLevel');
+      const dimValue = document.getElementById('dimValue');
+      function showDim(percent) {
+        dimLayer.style.opacity = String(percent / 100);
+        dimInput.value = String(percent);
+        dimValue.textContent = percent ? `${percent}%` : 'Off';
+      }
+      let savedDim = 0;
+      try { savedDim = Number(storage?.getItem(DIM_KEY)) || 0; } catch { /* no saved dimming */ }
+      showDim(Math.min(100, Math.max(0, Math.round(savedDim))));
+      dimInput.addEventListener('input', () => {
+        const percent = Number(dimInput.value);
+        showDim(percent);
+        try { storage?.setItem(DIM_KEY, String(percent)); } catch { /* applies for this page only */ }
+      });
+      // Volume. Canvas playback can boost to 400% (through a limiter in the player);
+      // the browser's own video element stops at 100%.
+      const maxVolume = selection.mode === 'standard' ? 1 : 4;
+      const volumeInput = document.getElementById('volumeLevel');
+      const volumeValue = document.getElementById('volumeValue');
+      let volume = readVolume(storage, maxVolume);
+      volumeInput.max = String(maxVolume * 100);
+      function showVolume() {
+        volumeInput.value = String(Math.round(volume * 100));
+        volumeValue.textContent = `${Math.round(volume * 100)}%`;
+        player?.setVolume?.(volume);
+      }
+      volumeInput.addEventListener('input', () => {
+        volume = normalizeVolume(Number(volumeInput.value) / 100, maxVolume);
+        showVolume();
+        saveVolume(storage, volume);
+      });
+      showVolume();
+
+      // Size and position. The page only sets CSS variables; the limits live in
+      // picture-layout.js. Moving is a mode, entered from the panel, because the
+      // controls overlay would otherwise take every drag.
+      const root = document.documentElement;
+      const sizeInput = document.getElementById('sizeLevel');
+      const sizeValue = document.getElementById('sizeValue');
+      const moveBtn = document.getElementById('moveBtn');
+      let picture = readPicture(storage);
+      function showPicture() {
+        root.style.setProperty('--pic-scale', String(picture.scale));
+        root.style.setProperty('--pic-x', String(picture.x));
+        root.style.setProperty('--pic-y', String(picture.y));
+        const percent = Math.round(picture.scale * 100);
+        sizeInput.value = String(percent);
+        sizeValue.textContent = `${percent}%`;
+        // At full size there is nowhere to move the picture.
+        moveBtn.disabled = picture.scale >= 1;
+        if (moveBtn.disabled) setMoving(false);
+      }
+      function setMoving(on) {
+        root.classList.toggle('moving', on);
+        moveBtn.setAttribute('aria-pressed', String(on));
+      }
+      sizeInput.addEventListener('input', () => {
+        picture = normalizePicture({ ...picture, scale: Number(sizeInput.value) / 100 });
+        showPicture();
+        savePicture(storage, picture);
+      });
+      moveBtn.addEventListener('click', () => setMoving(!root.classList.contains('moving')));
+      document.getElementById('resetPicture').addEventListener('click', () => {
+        picture = { ...CENTERED };
+        showPicture();
+        savePicture(storage, picture);
+      });
+      let drag = null;
+      window.addEventListener('pointerdown', event => {
+        if (!root.classList.contains('moving') || !event.isPrimary || event.target.closest?.('#controls, #topBar')) return;
+        drag = { id: event.pointerId, x: event.clientX, y: event.clientY, startX: picture.x, startY: picture.y };
+        event.preventDefault();
+      });
+      window.addEventListener('pointermove', event => {
+        if (!drag || event.pointerId !== drag.id) return;
+        picture = normalizePicture({
+          ...picture,
+          x: drag.startX + (event.clientX - drag.x) / window.innerWidth,
+          y: drag.startY + (event.clientY - drag.y) / window.innerHeight,
+        });
+        showPicture();
+      });
+      function endDrag(event) {
+        if (!drag || event.pointerId !== drag.id) return;
+        drag = null;
+        savePicture(storage, picture);
+      }
+      window.addEventListener('pointerup', endDrag);
+      window.addEventListener('pointercancel', endDrag);
+      showPicture();
+
+      const dimPanel = document.getElementById('dimPanel');
+      const dimBtn = document.getElementById('dimBtn');
+      function toggleDimPanel(open) {
+        dimPanel.hidden = !open;
+        dimBtn.setAttribute('aria-expanded', String(open));
+        if (open) clearTimeout(fadeTimer); else { setMoving(false); scheduleFade(); }
+      }
+      dimBtn.addEventListener('click', () => toggleDimPanel(dimPanel.hidden));
+      // A tap anywhere else, or Escape, puts the panel away. While moving, a tap
+      // on the picture is a drag, so the panel stays until Move is turned off.
+      document.addEventListener('pointerdown', event => {
+        if (root.classList.contains('moving')) return;
+        if (!dimPanel.hidden && !dimPanel.contains(event.target) && !dimBtn.contains(event.target)) toggleDimPanel(false);
+      });
+      document.addEventListener('keydown', event => { if (event.key === 'Escape' && !dimPanel.hidden) toggleDimPanel(false); });
+      document.getElementById('settingsBtn').addEventListener('click', () => {
+        toggleDimPanel(false);
+        select.value = support.secure ? preference : 'standard';
+        qualitySelect.value = preferredQuality;
+        describeMode();
+        clearTimeout(fadeTimer);
+        dialog.showModal();
+      });
+      select.addEventListener('change', describeMode);
+      qualitySelect.addEventListener('change', describeMode);
+      document.getElementById('cancelSettings').addEventListener('click', () => dialog.close());
+      dialog.addEventListener('close', () => {
+        document.getElementById('settingsBtn').focus();
+        scheduleFade();
+      });
+      apply.addEventListener('click', () => {
+        if (choosePlaybackMode(select.value, support).error) return;
+        const qualityChanged = qualitySelect.value !== preferredQuality;
+        if (select.value === preference && !qualityChanged) { dialog.close(); return; }
+        try {
+          storage.setItem(PLAYBACK_STORAGE_KEY, select.value);
+          if (qualityChanged) storage.setItem(QUALITY_STORAGE_KEY, qualitySelect.value);
+        } catch { /* URL retains this selection if storage is unavailable. */ }
+        const next = new URL(location.href);
+        next.searchParams.set('playback', select.value);
+        if (qualityChanged) {
+          // Auto measures again on reload; a fixed tier is used as it is.
+          if (qualitySelect.value === 'auto') next.searchParams.delete('quality');
+          else next.searchParams.set('quality', qualitySelect.value);
+        }
+        if (!isLive && player) next.searchParams.set('resume', String(player.clock.currentTime));
+        next.searchParams.set('paused', player?.state === 'paused' ? '1' : '0');
+        player?.liveAbort?.abort();
+        location.replace(next);
+      });
+      if (selection.error) {
+        setPinned(true);
+        log(selection.error + ' Open playback settings to choose another mode.');
+        return;
+      }
+      canvas.hidden = selection.mode !== 'canvas';
+      video.hidden = selection.mode !== 'standard';
+      // Standard playback hands audio to the browser's own video element.
+      document.getElementById('soundSection').hidden = selection.mode !== 'canvas';
+      const PlayerClass = selection.mode === 'standard' ? StandardPlayer : Player;
+      let lastCanvasStats = null;
+      let canvasHealthInFlight = false;
+      // Server logs only show when a segment left this server, not how long the
+      // car took to receive it, so measure segment downloads here.
+      const segmentNetwork = { segmentCount: 0, segmentBytes: 0, segmentFetchMs: 0, segmentSlowestMs: 0, segmentWaitMs: 0, segmentWaitSlowestMs: 0 };
+      try {
+        new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            if (!/\/proxy\/video\/.*\.(?:ts|m4s|mp4)$/.test(new URL(entry.name, location.href).pathname)) continue;
+            const fetchMs = Math.max(0, entry.responseEnd - entry.startTime);
+            segmentNetwork.segmentCount += 1;
+            segmentNetwork.segmentBytes += entry.encodedBodySize || 0;
+            segmentNetwork.segmentFetchMs += fetchMs;
+            segmentNetwork.segmentSlowestMs = Math.max(segmentNetwork.segmentSlowestMs, fetchMs);
+            // Time to first byte: the server starting the segment plus the round trip.
+            const waitMs = Math.max(0, entry.responseStart - entry.startTime);
+            segmentNetwork.segmentWaitMs += waitMs;
+            segmentNetwork.segmentWaitSlowestMs = Math.max(segmentNetwork.segmentWaitSlowestMs, waitMs);
+          }
+        }).observe({ type: 'resource', buffered: true });
+      } catch { /* Diagnostics only. */ }
+      // Main-thread responsiveness for the diagnostics: how late a 250 ms timer fires
+      // (a busy page answers touches late) and the browser's own long-task reports.
+      const responsiveness = { mainThreadMaxLagMs: 0, mainThreadLagCount: 0, longTaskCount: 0, longTaskMs: 0 };
+      let lagExpectedAt = performance.now() + 250;
+      setInterval(() => {
+        const now = performance.now();
+        const lag = Math.max(0, now - lagExpectedAt);
+        lagExpectedAt = now + 250;
+        responsiveness.mainThreadMaxLagMs = Math.max(responsiveness.mainThreadMaxLagMs, Math.round(lag));
+        if (lag > 100) responsiveness.mainThreadLagCount += 1;
+      }, 250);
+      try {
+        new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) { responsiveness.longTaskCount += 1; responsiveness.longTaskMs += Math.round(entry.duration); }
+        }).observe({ type: 'longtask', buffered: true });
+      } catch { /* long tasks are not reported by every browser */ }
+      function reportCanvasHealth() {
+        if (selection.mode !== 'canvas' || !lastCanvasStats || canvasHealthInFlight) return;
+        canvasHealthInFlight = true;
+        const heapBytes = performance.memory?.usedJSHeapSize;
+        const body = { playbackId, live: isLive, quality: currentQuality, ...lastCanvasStats, ...segmentNetwork };
+        segmentNetwork.segmentSlowestMs = 0;
+        segmentNetwork.segmentWaitSlowestMs = 0;
+        if (Number.isFinite(heapBytes)) body.heapBytes = heapBytes;
+        Object.assign(body, responsiveness);
+        responsiveness.mainThreadMaxLagMs = 0;
+        if (mediaActionLog.length) {
+          const nowMs = performance.now();
+          body.mediaActionLog = mediaActionLog.splice(0).map(e => `${e.name}:${e.state}:${((nowMs - e.at) / 1000).toFixed(1)}`).join(',');
+        }
+        body.mediaPlayActions = mediaActionCounts.play || 0;
+        body.mediaPauseActions = mediaActionCounts.pause || 0;
+        body.mediaNextActions = mediaActionCounts.nexttrack || 0;
+        body.mediaPreviousActions = mediaActionCounts.previoustrack || 0;
+        body.mediaSeekActions = (mediaActionCounts.seekforward || 0) + (mediaActionCounts.seekbackward || 0) + (mediaActionCounts.seekto || 0);
+        const clip = mediaControls?.silentClipPlaying?.();
+        if (clip !== null && clip !== undefined) body.mediaClipPlaying = clip ? 1 : 0;
+        fetch('/api/playback/canvas-health', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body), keepalive: true,
+          signal: AbortSignal.timeout(5000),
+        }).catch(() => {}).finally(() => { canvasHealthInFlight = false; });
+      }
+      if (selection.mode === 'canvas') {
+        const healthTimer = setInterval(reportCanvasHealth, 15000);
+        // Outside production the server also keeps audio-output details; report
+        // often enough to catch a start that was silent before the viewer left
+        // (the server accepts 12 reports a minute).
+        fetch('/api/playback/diagnostics').then(res => (res.ok ? res.json() : null)).then(info => {
+          if (!info?.enabled) return;
+          clearInterval(healthTimer);
+          setInterval(reportCanvasHealth, 6000);
+        }).catch(() => {});
+      }
+      let mediaControls = null;
+      const mediaActionCounts = {};
+      const mediaActionLog = [];
+      player = new PlayerClass({
+        video,
+        canvas,
+        quality: currentQuality,
+        onStateChange: (state, detail) => {
+          log(`state: ${state}${detail.error ? ' — playback error' : ''}`);
+          if (detail.error) {
+            console.warn('[playback]', isLive ? 'live' : 'Plex', selection.mode,
+              detail.error.name, detail.error.message);
+          }
+          renderPlayPause(state);
+          if (state === 'playing') clearStoppedBanner();
+          mediaControls?.update(state, { position: player?.clock?.currentTime, duration: player?.duration });
+          setPinned(state !== 'playing');
+          if (isLive) updateLiveLabel(state);
+          queueMicrotask(() => reportPlaybackState(state === 'playing' ? 'playing' : state === 'ended' ? 'stopped' : 'paused'));
+          if (isLive && state === 'error') scheduleLiveReconnect();
+          if (!isLive && state === 'ended') startNextCountdown();
+          else if (state !== 'ended') leaveNextCountdown();
+          if (!isLive && state === 'error' && !vodLoading) recoverFromError();
+          if (state === 'error' && lastCanvasStats) {
+            lastCanvasStats = { ...lastCanvasStats, state };
+            reportCanvasHealth();
+          }
+          if (detail.audioResumeBlocked) showAudioUnlockPrompt();
+        },
+        onStats: (stats) => {
+          window.__lastStats = stats;
+          if (selection.mode === 'canvas') lastCanvasStats = stats;
+          watchPlaybackHealth(stats);
+          mediaControls?.update(player.state, { position: stats.mediaTime, duration: player.duration });
+          if (isLive) return;
+          updateNextButton();
+          if (!userScrubbing) {
+            seekBar.value = String(Math.floor(stats.mediaTime));
+            timeLabel.textContent = `${fmtTime(stats.mediaTime)} / ${fmtTime(player.duration)}`;
+          }
+        },
+      });
+      window.__player = player;
+      player.setVolume?.(volume);
+
+      // Browser media controls: media keys, the system media panel, headset buttons.
+      mediaControls = createMediaSession({
+        isLive,
+        // Canvas plays sound through Web Audio, which alone doesn't show the controls.
+        keepAlive: selection.mode === 'canvas',
+        onAction: (name) => {
+          mediaActionCounts[name] = (mediaActionCounts[name] || 0) + 1;
+          // The player's state when the press arrived, for the diagnostics.
+          mediaActionLog.push({ name, state: player?.state || 'none', at: performance.now() });
+          if (mediaActionLog.length > 12) mediaActionLog.shift();
+        },
+        actions: {
+          play: () => { if (!showingStillImage && !streamLimitHandled && !quotaExceededHandled) player.play(); },
+          pause: () => { player.pause(); if (!isLive) reportProgress('paused'); },
+          seekBy: (seconds) => player.seek(player.clock.currentTime + seconds),
+          seekTo: (seconds) => player.seek(seconds),
+        },
+      });
+
+      const itemKey = isLive ? null : urlParams.get('key');
+      const resumeSeconds = isLive ? 0 : Number(urlParams.get('resume')) || 0;
+
+      // The next episode of a show. Play Next appears once playback passes the
+      // point where the item counts as watched, and the next episode starts by
+      // itself when this one ends.
+      let nextEpisode = null;
+      let watchedAt = 0.9;
+      let movingOn = false;
+      const playNextBtn = document.getElementById('playNextBtn');
+      const cancelNextBtn = document.getElementById('cancelNextBtn');
+      const playNextLabel = playNextBtn.firstElementChild;
+      let declinedNext = false;
+      const nextCountdown = createNextCountdown({
+        onTick: (seconds) => {
+          playNextBtn.classList.add('counting');
+          playNextLabel.textContent = `Playing next in ${seconds}`;
+        },
+        onDone: () => playNextEpisode(),
+      });
+      function resetNextButton() {
+        playNextLabel.textContent = 'Play Next';
+        playNextBtn.classList.remove('counting');
+        cancelNextBtn.hidden = true;
+      }
+      function updateNextButton() {
+        if (nextCountdown.active) return;
+        const length = player?.duration;
+        playNextBtn.hidden = !(nextEpisode && Number.isFinite(length) && length > 0
+          && player.clock.currentTime / length >= watchedAt);
+      }
+      // At the end, give the viewer a few seconds to cancel before moving on.
+      function startNextCountdown() {
+        if (!nextEpisode || movingOn || isLive || declinedNext || nextCountdown.active) return;
+        playNextBtn.hidden = false;
+        cancelNextBtn.hidden = false;
+        nextCountdown.start();
+      }
+      // Cancelling keeps Play Next on screen for a manual press.
+      function cancelNextCountdown() {
+        declinedNext = true;
+        nextCountdown.cancel();
+        resetNextButton();
+      }
+      // Playing or seeking again ends the wait; a later finish counts down afresh.
+      function leaveNextCountdown() {
+        declinedNext = false;
+        if (nextCountdown.cancel()) resetNextButton();
+      }
+      function playNextEpisode() {
+        if (!nextEpisode || movingOn || isLive) return;
+        nextCountdown.cancel();
+        movingOn = true;
+        const target = new URL('/canvas2', location.origin);
+        target.searchParams.set('key', nextEpisode.ratingKey);
+        // Keep where we came from and how the viewer plays; quality is chosen afresh.
+        for (const name of ['tab', 'playback']) {
+          if (urlParams.has(name)) target.searchParams.set(name, urlParams.get(name));
+        }
+        location.replace(target);
+      }
+      playNextBtn.addEventListener('click', playNextEpisode);
+      cancelNextBtn.addEventListener('click', cancelNextCountdown);
+
+      // Use the supplied title for live playback; fetch VOD metadata asynchronously.
+      const titleDisplayEl = document.getElementById('titleDisplay');
+      if (isLive) {
+        titleDisplayEl.textContent = urlParams.get('name') || '';
+        mediaControls.setMetadata({ title: urlParams.get('name') || 'Live', artist: 'Live' });
+      } else if (itemKey) {
+        fetch(`/api/library/next/${encodeURIComponent(itemKey)}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (!data) return;
+            nextEpisode = data.next || null;
+            if (data.watchedAt > 0 && data.watchedAt <= 1) watchedAt = data.watchedAt;
+            updateNextButton();
+          }).catch(() => {});
+        fetch(`/api/library/item/${encodeURIComponent(itemKey)}`)
+          .then((res) => (res.ok ? res.json() : null))
+          .then((item) => {
+            if (!item) return;
+            titleDisplayEl.textContent = item.showTitle
+              ? `${item.showTitle} — S${item.season}E${item.episode} ${item.title}`
+              : item.title;
+            mediaControls.setMetadata({
+              title: item.title,
+              artist: item.showTitle || (item.year ? String(item.year) : ''),
+              album: item.showTitle ? `Season ${item.season} · Episode ${item.episode}` : '',
+              artwork: item.thumbnail ? [{ src: item.thumbnail, sizes: '390x585', type: 'image/jpeg' }] : [],
+            });
+          })
+          .catch(() => {});
+      }
+      // Live stream source is opaque to core: whatever registered the tab that
+      // linked here owns the endpoint. Restrict to a same-origin relative path.
+      const liveSrc = urlParams.get('src') || '';
+      const liveTarget = liveSrc.startsWith('/') && !liveSrc.startsWith('//') ? new URL(liveSrc, location.origin) : null;
+      if (liveTarget) { liveTarget.searchParams.set('playbackId', playbackId); }
+      // The stream is asked for at the current quality, like on-demand playback.
+      function buildLiveUrl() {
+        if (!liveTarget) return '';
+        const target = new URL(liveTarget);
+        target.searchParams.set('quality', currentQuality);
+        return target.pathname + target.search;
+      }
+      let liveUrl = buildLiveUrl();
+
+      // Live streams have no fixed duration/seek target and isn't scrobble-tracked
+      // the way VOD is — hide the controls that don't apply.
+      if (isLive) {
+        document.getElementById('back30').style.display = 'none';
+        document.getElementById('fwd30').style.display = 'none';
+        seekBar.style.display = 'none';
+        document.getElementById('watchedControls').style.display = 'none';
+        timeLabel.classList.add('live-indicator');
+      }
+
+      // Skip the final progress report after an explicit watched/unwatched
+      // action (also set once a quota cuts playback below).
+      let watchStateJustChanged = false;
+
+      // A quota can run out mid-episode; the server stops the Plex
+      // session and flags this heartbeat's response rather than letting the
+      // stream merely fail, so we can tell the viewer why in plain language.
+      let quotaExceededHandled = false;
+      function handleQuotaExceeded(resetAt) {
+        if (quotaExceededHandled) return;
+        quotaExceededHandled = true;
+        watchStateJustChanged = true;
+        player.liveAbort?.abort();
+        try { player.pause(); } catch { /* already stopped */ }
+        const resetText = resetAt ? ` More time unlocks ${new Date(resetAt).toLocaleString()}.` : '';
+        showBanner(`You're out of watch time.${resetText}`, { persist: true });
+        setTimeout(() => location.replace(returnUrl), 4000);
+      }
+
+      let streamLimitHandled = false;
+      function handleStreamLimit() {
+        if (streamLimitHandled) return;
+        streamLimitHandled = true;
+        watchStateJustChanged = true;
+        player.liveAbort?.abort();
+        player.pause();
+        showBanner('This account has reached its stream limit. Close another player and try again.', { persist: true });
+      }
+      const rejectBlockedPlayback = createQuotaGuard({onExceeded:handleQuotaExceeded,onStreamLimit:handleStreamLimit});
+
+      let usageInFlight = false;
+      let queuedPlaybackState = null;
+      reportPlaybackState = (state, {beacon=false} = {}) => {
+        if(quotaExceededHandled || streamLimitHandled)return;
+        // /api/start registers this playback ID; a report before then looks
+        // like an expired session and would tear down a stream about to begin.
+        if(!playbackRegistered)return;
+        if(usageInFlight && !beacon){queuedPlaybackState=state;return;}
+        const body=JSON.stringify({playbackId,state});
+        if(beacon && navigator.sendBeacon){navigator.sendBeacon('/api/playback/usage',new Blob([body],{type:'application/json'}));return;}
+        usageInFlight=true;
+        fetch('/api/playback/usage',{method:'POST',headers:{'Content-Type':'application/json'},body,keepalive:true,signal:AbortSignal.timeout(5000)})
+          .then(async response=>{
+            const data=await response.json().catch(()=>null);
+            if(data?.quota && Number.isFinite(data.quota.remainingSeconds))quotaRemainingSeconds=data.quota.remainingSeconds;
+            if(response.status===403 && data?.code==='QUOTA_EXCEEDED')handleQuotaExceeded(data.resetAt);
+            if(response.status===409 && data?.code==='ACCOUNT_STREAM_LIMIT')handleStreamLimit();
+            if(response.status===409 && data?.code==='PLAYBACK_EXPIRED'){
+              if(recentlyRecovered())showBanner('Playback session ended. Leave and reopen the player to retry.',{persist:true});
+              else reloadPlayback(currentQuality,{recovery:true});
+            }
+          }).catch(()=>{}).finally(()=>{
+            usageInFlight=false;
+            if(queuedPlaybackState!==null){const next=queuedPlaybackState;queuedPlaybackState=null;reportPlaybackState(next);}
+          });
+      };
+      setInterval(()=>{
+        if (player.state !== 'ended') reportPlaybackState(player.state==='playing'?'playing':'paused');
+      },10000);
+
+      // Serialize progress reports and reject stale timestamps to avoid rewinding Plex state.
+      let lastReportedMs = -1;
+      let reportInFlight = false;
+      function reportProgress(state, { useBeacon = false } = {}) {
+        if (!itemKey) return;
+        const timeMs = Math.round(player.clock.currentTime * 1000);
+        if (timeMs <= lastReportedMs) return;
+        if (!useBeacon && reportInFlight) return;
+        lastReportedMs = timeMs;
+        const durationMs = Number.isFinite(player.duration) ? Math.round(player.duration * 1000) : undefined;
+        const body = { ratingKey: itemKey, timeMs, state, durationMs };
+        if (useBeacon && navigator.sendBeacon) {
+          navigator.sendBeacon('/api/library/progress', new Blob([JSON.stringify(body)], { type: 'application/json' }));
+        } else {
+          reportInFlight = true;
+          fetch('/api/library/progress', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            keepalive: true,
+          })
+            .then(async (res) => {
+              if (res.status !== 403) return;
+              const data = await res.json().catch(() => null);
+              if (data?.code === 'QUOTA_EXCEEDED') handleQuotaExceeded(data.resetAt);
+            })
+            .catch(() => {})
+            .finally(() => { reportInFlight = false; });
+        }
+      }
+      // Keep the address in step with playback, so a browser reload resumes where
+      // the viewer is now, not where this page started, and in the same play/pause state.
+      function syncAddress() {
+        if (isLive || showingStillImage || !Number.isFinite(player.clock.currentTime)) return;
+        const state = player.state;
+        if (state !== 'playing' && state !== 'paused' && state !== 'buffering') return;
+        try {
+          const here = new URL(location.href);
+          here.searchParams.set('resume', String(Math.floor(player.clock.currentTime)));
+          here.searchParams.set('paused', state === 'paused' ? '1' : '0');
+          history.replaceState(history.state, '', here);
+        } catch { /* The address is only a convenience. */ }
+      }
+      setInterval(() => {
+        if (player.state === 'playing') reportProgress('playing');
+        syncAddress();
+      }, 10000);
+      window.addEventListener('pagehide', () => {
+        leaving = true;
+        syncAddress();
+        reportPlaybackState('stopped', {beacon:true});
+        player.liveAbort?.abort();
+        if (!isLive && !watchStateJustChanged) reportProgress('stopped', { useBeacon: true });
+        player.destroy?.();
+      });
+
+      const bannerEl = document.getElementById('resumeBanner');
+      const { show: showBanner, hide: hideBanner } = createPlaybackBanner(bannerEl);
+      // "Playback stopped" and "stalled" ask the viewer to reopen the player, but
+      // playback can come back by itself (a seek or a retry). Once it is playing
+      // again the message is wrong, so take it down and let the stall watchdog
+      // watch again.
+      function clearStoppedBanner() {
+        if (!bannerEl.classList.contains('visible')) return;
+        if (!/^Playback (stopped|is stalled)\./.test(bannerEl.textContent)) return;
+        hideBanner();
+        downgrading = false;
+        lastProgressAt = performance.now();
+      }
+
+      // Show a recovery prompt when browser autoplay policy blocks audio resume.
+      const audioUnlockBtn = document.getElementById('audioUnlockBtn');
+      audioUnlockBtn.addEventListener('click', async () => {
+        audioUnlockBtn.style.display = 'none';
+        await player.play();
+      });
+      function showAudioUnlockPrompt() {
+        audioUnlockBtn.style.display = 'block';
+      }
+
+      // Paused live playback buffers behind the live edge; reflect that in the label.
+      function updateLiveLabel(state) {
+        timeLabel.classList.remove('live-active', 'live-paused');
+        if (state === 'playing') {
+          timeLabel.replaceChildren(iconEl('dot'), ' LIVE');
+          timeLabel.title = 'Jump to live';
+          timeLabel.classList.add('live-active');
+        } else if (state === 'paused') {
+          timeLabel.textContent = 'Go live';
+          timeLabel.title = 'Not live — tap to jump to live';
+          timeLabel.classList.add('live-paused');
+        } else if (state === 'buffering') {
+          timeLabel.textContent = 'LIVE · buffering…';
+          timeLabel.title = 'Jump to live';
+        } else {
+          timeLabel.textContent = 'LIVE · connecting…';
+          timeLabel.title = 'Jump to live';
+        }
+      }
+
+      // Retry interrupted live feeds with backoff; display image-only feeds without a decoder.
+      let showingStillImage = false;
+      function showStillImage(blob) {
+        showingStillImage = true;
+        stillImage.src = URL.createObjectURL(blob);
+        stillImage.style.display = 'block';
+        canvas.style.display = 'none';
+        video.style.display = 'none';
+        setState('paused');
+      }
+      function hideStillImage() {
+        if (!showingStillImage) return;
+        showingStillImage = false;
+        stillImage.style.display = 'none';
+        canvas.style.display = '';
+        video.style.display = '';
+        URL.revokeObjectURL(stillImage.src);
+        stillImage.removeAttribute('src');
+      }
+      // Mirror player state for still images, which bypass the playback engine.
+      function setState(state) {
+        renderPlayPause(state);
+        setPinned(true);
+        if (isLive) updateLiveLabel(state);
+      }
+
+      async function loadLiveAny() {
+        player.liveAbort?.abort();
+        const abortController = new AbortController();
+        const response = await fetch(liveUrl, { signal: abortController.signal });
+        if (!response.ok) {
+          const detail = await response.json().catch(() => null);
+          if (detail?.code === 'QUOTA_EXCEEDED') handleQuotaExceeded(detail.resetAt);
+          if (detail?.code === 'ACCOUNT_STREAM_LIMIT') handleStreamLimit();
+          throw new Error(detail?.error || `Failed to fetch live stream: ${response.status}`);
+        }
+        playbackRegistered = true;
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.startsWith('image/')) {
+          showStillImage(await response.blob());
+          return;
+        }
+        hideStillImage();
+        return player.loadLiveMpegTs(liveUrl, { response, abortController });
+      }
+
+      // Start playback after loading, unless the response is a still image.
+      async function playLiveAny() {
+        await loadLiveAny();
+        if (!showingStillImage) await player.play();
+      }
+
+      const MAX_RECONNECT_ATTEMPTS = 6;
+      let reconnecting = false;
+      let reconnectAttempt = 0;
+      function scheduleLiveReconnect() {
+        if (quotaExceededHandled || streamLimitHandled || reconnecting) return;
+        reconnecting = true;
+        reconnectAttempt += 1;
+        if (reconnectAttempt > MAX_RECONNECT_ATTEMPTS) {
+          showBanner('Live stream unavailable — giving up', { persist: true });
+          log(`gave up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts`);
+          return;
+        }
+        const delay = Math.min(3000 * reconnectAttempt, 20000);
+        showBanner(`Live signal lost — reconnecting… (${reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS})`, { persist: true });
+        setTimeout(async () => {
+          reconnecting = false; // allow a fresh schedule once this attempt resolves, including a recursive retry below
+          if (quotaExceededHandled || streamLimitHandled) return;
+          try {
+            await playLiveAny();
+            reconnectAttempt = 0;
+            showBanner('Reconnected');
+          } catch (err) {
+            log(`reconnect attempt ${reconnectAttempt} failed: ${err.message}`);
+            scheduleLiveReconnect();
+          }
+        }, delay);
+      }
+
+      if (await rejectBlockedPlayback()) return;
+
+      if (isLive) {
+        if (!hasQualityOverride) {
+          log('Checking connection…');
+          currentQuality = await measureStartupQuality({ url: '/api/playback-speed', timeoutMs: 3000 });
+          liveUrl = buildLiveUrl();
+        }
+        log(`loading at ${currentQuality} quality…`);
+        try {
+          await loadLiveAny();
+        } catch (err) {
+          if (streamLimitHandled) return;
+          log(`Live stream failed: ${err.message}`);
+          scheduleLiveReconnect();
+        }
+      } else {
+        directAttempt = directAttempt && await directCapablePromise;
+        if (!hasQualityOverride && !directAttempt) {
+          log('Checking connection…');
+          currentQuality = await measureStartupQuality({ url: '/api/playback-speed', timeoutMs: 3000 });
+        }
+        log(`Loading video at ${currentQuality} quality…`);
+        const startParams = new URLSearchParams({ quality: currentQuality, playbackId });
+        if (itemKey) startParams.set('key', itemKey);
+        const startUrl = `/api/start?${startParams}`;
+        // A lower tier means the connection already looked weak, so download
+        // further ahead whenever it has capacity to spare.
+        const readAheadSeconds = READ_AHEAD_SECONDS[currentQuality] || 0;
+        const startTime = resumeSeconds;
+        try {
+          await player.load(startUrl + (directAttempt ? '&direct=1' : ''), { direct: directAttempt, readAheadSeconds, startTime });
+        } catch (error) {
+          if (await rejectBlockedPlayback(error)) return;
+          if (!directAttempt) throw error;
+          directAttempt = false;
+          showBanner('Direct connection unavailable — using server relay');
+          try { await player.load(startUrl, { readAheadSeconds, startTime }); }
+          catch (fallbackError) {
+            if (await rejectBlockedPlayback(fallbackError)) return;
+            throw fallbackError;
+          }
+        }
+        vodLoading = false;
+        playbackRegistered = true;
+        document.getElementById('activePlayback').textContent =
+          `Now: ${selection.mode === 'canvas' ? 'Canvas' : 'Standard'} · ${directAttempt ? 'Direct from Plex' : 'Server relay'}`;
+        seekBar.max = String(Math.floor(player.duration));
+      }
+
+      if (resumeSeconds > 0 && !showingStillImage) {
+        log(`resuming at ${fmtTime(resumeSeconds)}…`);
+        // The Canvas player already loaded at the resume point; the standard player still needs the seek.
+        if (Math.abs(player.clock.currentTime - resumeSeconds) > 0.5) await player.seek(resumeSeconds);
+        showBanner(`Resuming at ${fmtTime(resumeSeconds)} — tap to start from the beginning`, {
+          onClick: async () => {
+            hideBanner();
+            lastReportedMs = -1; // allow forward reports again after seeking back past the old mark
+            await player.seek(0);
+          },
+        });
+      }
+
+      if (isLive && !showingStillImage) updateLiveLabel(player.state);
+      else if (!isLive) timeLabel.textContent = `${fmtTime(player.clock.currentTime)} / ${fmtTime(player.duration)}`;
+      log('loaded, autoplaying…');
+      if (!showingStillImage && urlParams.get('paused') !== '1') await player.play();
+
+      // Remaining watch-time readout: a client-side estimate only, for display.
+      // The actual cutoff is enforced server-side by watch-time accounting
+      // (see handleQuotaExceeded) regardless of what this shows.
+      const quotaLabel = document.getElementById('quotaLabel');
+      function formatRemaining(seconds) {
+        const minutes = Math.max(0, Math.round(seconds / 60));
+        if (minutes < 60) return `${minutes}m left`;
+        const hours = Math.floor(minutes / 60);
+        const rest = minutes % 60;
+        return `${hours}h${rest ? ` ${rest}m` : ''} left`;
+      }
+      try {
+        const meRes = await fetch('/api/auth/me');
+        const me = meRes.ok ? await meRes.json() : null;
+        if (me?.quota && Number.isFinite(me.quota.remainingSeconds)) {
+          quotaRemainingSeconds = me.quota.remainingSeconds;
+          quotaLabel.style.display = 'inline';
+          quotaLabel.textContent = formatRemaining(quotaRemainingSeconds);
+          quotaLabel.classList.toggle('quota-low', quotaRemainingSeconds < 300);
+          setInterval(() => {
+            if (player.state !== 'playing' || quotaExceededHandled) return;
+            quotaRemainingSeconds = Math.max(0, quotaRemainingSeconds - 1);
+            if (quotaRemainingSeconds <= 0) {
+              reportPlaybackState(player.state === 'playing' ? 'playing' : 'paused');
+            }
+            quotaLabel.textContent = formatRemaining(quotaRemainingSeconds);
+            quotaLabel.classList.toggle('quota-low', quotaRemainingSeconds < 300);
+          }, 1000);
+        }
+      } catch { /* readout is best-effort; playback itself doesn't depend on it */ }
+
+      playPauseBtn.addEventListener('click', () => {
+        if (showingStillImage || streamLimitHandled) return;
+        if (player.state === 'playing') {
+          player.pause();
+          reportProgress('paused');
+        } else {
+          player.play();
+        }
+      });
+      // After updating watch state, reload the originating browse tab.
+      document.getElementById('markWatchedBtn').addEventListener('click', async () => {
+        if (!itemKey) return;
+        try {
+          await fetch(`/api/library/watched/${encodeURIComponent(itemKey)}`, { method: 'POST' });
+        } catch {
+          showBanner('Failed to mark as watched');
+          return;
+        }
+        watchStateJustChanged = true;
+        location.replace(returnUrl);
+      });
+      document.getElementById('markUnwatchedBtn').addEventListener('click', async () => {
+        if (!itemKey) return;
+        try {
+          await fetch(`/api/library/unwatched/${encodeURIComponent(itemKey)}`, { method: 'POST' });
+        } catch {
+          showBanner('Failed to mark as unwatched');
+          return;
+        }
+        watchStateJustChanged = true;
+        location.replace(returnUrl);
+      });
+      if (isLive) {
+        let jumpingToLive = false;
+        timeLabel.addEventListener('click', async () => {
+          if (jumpingToLive || streamLimitHandled) return;
+          jumpingToLive = true;
+          // Reconnect to discard buffered content and rejoin the live edge.
+          showBanner('Jumping to live…');
+          try {
+            await playLiveAny();
+            showBanner(showingStillImage ? 'Stream unavailable' : 'Live');
+          } catch (err) {
+            log(`jump to live failed: ${err.message}`);
+            scheduleLiveReconnect();
+          } finally {
+            jumpingToLive = false;
+          }
+        });
+      }
+      const restartSoundBtn = document.getElementById('restartSound');
+      restartSoundBtn.addEventListener('click', async () => {
+        if (!player || streamLimitHandled || restartSoundBtn.disabled) return;
+        restartSoundBtn.disabled = true;
+        dialog.close();
+        showBanner('Restarting sound…');
+        mediaControls?.restartSilentClip?.();
+        try {
+          // A live stream can't be rewound, so reconnect it, as Go live does.
+          if (isLive) await playLiveAny();
+          else await player.restartAudio();
+          showBanner('Sound restarted');
+        } catch (err) {
+          log(`restart sound failed: ${err.message}`);
+          showBanner('Could not restart sound. Leave and reopen the player to retry.');
+        } finally {
+          restartSoundBtn.disabled = false;
+        }
+      });
+      document.getElementById('back30').addEventListener('click', () => {
+        player.seek(player.clock.currentTime - 30);
+      });
+      document.getElementById('fwd30').addEventListener('click', () => {
+        player.seek(player.clock.currentTime + 30);
+      });
+      seekBar.addEventListener('mousedown', () => { userScrubbing = true; });
+      seekBar.addEventListener('change', () => {
+        userScrubbing = false;
+        player.seek(Number(seekBar.value));
+      });
+    }
+
+    main().catch((err) => {
+      log('ERROR: Playback failed. Please reload or try another playback mode.');
+    });
+  </script>
+</body>
+</html>

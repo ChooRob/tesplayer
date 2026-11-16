@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FreeStuffCrazy Player — sign in</title>
+  <style>
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body {
+      margin: 0; background: #111; color: #eee;
+      font-family: -apple-system, system-ui, sans-serif;
+    }
+    body { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .card { text-align: center; max-width: 360px; padding: 32px; transition: max-width 0.2s ease; }
+    .card.wide { width: min(960px, 92vw); max-width: min(960px, 92vw); }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    .brandLink { display: flex; align-items: center; justify-content: center; color: #fff; text-decoration: none; font-weight: 700; }
+    .brandLink:hover, .brandLink:focus-visible { text-decoration: underline; }
+    .brandLogoImg { width: 200px; height: auto; }
+    .brandPlayerSuffix { margin-left: 10px; }
+    .brandFallback { display: none; white-space: nowrap; }
+    .brandCrazy { color: #ffc233; }
+    p { color: #999; font-size: 14px; margin: 0 0 28px; }
+    .signIn {
+      background: #e5a00d; color: #111; border: none; border-radius: 8px;
+      padding: 14px 28px; font-size: 16px; font-weight: 700; cursor: pointer;
+      width: 100%; min-height: 48px;
+    }
+    .signIn + .signIn { margin-top: 12px; }
+    /* Jellyfin's brand gradient, purple to blue. */
+    .signIn.jellyfin { background: #aa5cc3 linear-gradient(90deg, #aa5cc3, #00a4dc); color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); }
+    .signIn:disabled { opacity: 0.6; cursor: default; }
+    #jellyfinStep p { margin: 12px 0; }
+    .jellyfinForm { display: grid; gap: 12px; text-align: left; }
+    .jellyfinForm label { display: grid; gap: 6px; font-size: 13px; color: #bbb; }
+    .jellyfinForm input {
+      background: #1c1c1c; color: #eee; border: 1px solid #444; border-radius: 6px;
+      padding: 12px; font-size: 16px; min-height: 44px;
+    }
+    .textButton { background: none; border: none; color: #999; font: inherit; font-size: 13px; text-decoration: underline; cursor: pointer; margin-top: 18px; min-height: 44px; }
+    #status { margin-top: 18px; font-size: 13px; color: #999; min-height: 18px; }
+    #status.error { color: #ff6b6b; }
+    #setupError {
+      text-align: left; background: #2a1414; color: #ffb3b3; border: 1px solid #7a2e2e; border-radius: 8px;
+      padding: 12px 14px; margin: 0 0 20px; font-size: 13px; line-height: 1.45;
+    }
+    #setupError strong { color: #fff; display: block; margin-bottom: 4px; }
+    #setupError ul { margin: 0; padding-left: 18px; }
+
+    #userPicker { display: none; }
+    #userGrid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+      gap: 20px;
+      margin-top: 8px;
+    }
+    .userTile {
+      cursor: pointer; background: none; border: none; color: #eee;
+      font-family: inherit; padding: 0;
+    }
+    .userTile img, .userTile .avatarFallback {
+      width: 72px; height: 72px; border-radius: 50%; object-fit: cover; margin: 0 auto 8px;
+      background: #333; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700;
+    }
+    .userTile .title { font-size: 13px; line-height: 1.3; word-break: break-word; }
+    #pinForm { display: none; margin-top: 20px; }
+    #pinInput {
+      background: #1c1c1c; color: #eee; border: 1px solid #444; border-radius: 6px;
+      padding: 10px 12px; font-size: 18px; width: 120px; text-align: center; letter-spacing: 4px;
+    }
+    #pinForm button {
+      background: #e5a00d; color: #111; border: none; border-radius: 6px;
+      padding: 10px 16px; font-size: 14px; font-weight: 700; cursor: pointer; margin-left: 8px;
+    }
+
+    #linkStep { display: none; }
+    #linkStep p { margin: 12px 0; }
+    #linkQr { width: min(222px, 60vw); height: auto; image-rendering: pixelated; }
+    #linkCode, #jellyfinCode {
+      font-size: 36px; font-weight: 700; letter-spacing: 6px; font-family: ui-monospace, monospace;
+      background: #1c1c1c; border: 1px solid #444; border-radius: 8px;
+      padding: 16px; margin: 6px 0 18px;
+    }
+    #credit { position: fixed; left: 0; right: 0; bottom: 14px; text-align: center; font-size: 13px; }
+    #credit a { color: #9a9aa3; text-decoration: none; }
+    #credit a:hover, #credit a:focus-visible { color: #fff; text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card" id="card">
+    <h1><a class="brandLink" href="https://freestuffcrazy.com">
+      <img class="brandLogoImg" src="https://freestuffcrazy.com/icons/freestuffcrazy-logo.svg" alt="FreeStuffCrazy">
+      <span class="brandPlayerSuffix">Player</span>
+      <span class="brandFallback">FreeStuff<span class="brandCrazy">CRAZY</span> Player</span>
+    </a></h1>
+    <div id="setupError" role="alert" hidden>
+      <strong>This server isn't set up correctly.</strong>
+      <ul id="setupProblems"></ul>
+    </div>
+    <div id="signInStep">
+      <p id="signInIntro">Sign in with the Plex account that has access to this server.</p>
+      <button id="signInBtn" class="signIn">Sign in with Plex</button>
+      <button id="jellyfinBtn" class="signIn jellyfin" hidden>Sign in with Jellyfin</button>
+    </div>
+    <div id="jellyfinStep" hidden>
+      <form id="jellyfinServerForm" class="jellyfinForm" hidden>
+        <p id="jellyfinServerHint">Enter your Jellyfin server's https:// address, or leave it empty to use this site's own Jellyfin server.</p>
+        <label><span id="jellyfinServerLabel">Server address</span><input id="jellyfinServer" name="server" type="text" inputmode="url" autocomplete="url" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="https://jellyfin.example.com"></label>
+        <button type="submit" class="signIn jellyfin">Continue</button>
+      </form>
+      <div id="jellyfinCodeStep" hidden>
+        <p>In any Jellyfin app signed in to <strong id="jellyfinServerName">this server</strong>, open <strong>Settings › Quick Connect</strong> and enter this code.</p>
+        <div id="jellyfinCode"></div>
+        <button type="button" id="jellyfinUsePassword" class="textButton">Use a username and password instead</button>
+      </div>
+      <form id="jellyfinPasswordForm" class="jellyfinForm" hidden>
+        <p>Sign in with your Jellyfin account.</p>
+        <label>Username<input id="jellyfinUsername" name="username" autocomplete="username" autocapitalize="none" required></label>
+        <label>Password<input id="jellyfinPassword" name="password" type="password" autocomplete="current-password"></label>
+        <button type="submit" class="signIn jellyfin">Sign in</button>
+        <button type="button" id="jellyfinUseQuickConnect" class="textButton" hidden>Use Quick Connect instead</button>
+      </form>
+      <button type="button" id="jellyfinBack" class="textButton">Back</button>
+    </div>
+    <div id="linkStep">
+      <div id="scanStep" hidden>
+        <p>Scan with your phone to sign in with Plex.</p>
+        <img id="linkQr" alt="QR code to link this player to Plex">
+      </div>
+      <p>Or go to <strong>plex.tv/link</strong> and enter this code.</p>
+      <div id="linkCode"></div>
+      <button type="button" class="textButton plexBack">Back</button>
+    </div>
+    <div id="userPicker">
+      <p>Who's watching?</p>
+      <div id="userGrid"></div>
+      <form id="pinForm">
+        <input id="pinInput" type="password" inputmode="numeric" maxlength="4" placeholder="PIN" />
+        <button type="submit">Go</button>
+      </form>
+      <button type="button" class="textButton plexBack">Back</button>
+    </div>
+    <div id="status"></div>
+  </div>
+
+  <script type="module">
+    import { safeReturnPath } from "/safe-navigation.js";
+    import { iconEl } from "/icons.js";
+
+    // CSP blocks inline onerror attributes, so wire the brand logo's
+    // fallback here instead; also covers the image having already
+    // failed before this (deferred) script runs.
+    document.querySelectorAll('.brandLogoImg').forEach((img) => {
+      const showFallback = () => {
+        img.nextElementSibling?.remove();
+        img.parentElement.querySelector('.brandFallback').style.display = 'inline';
+        img.remove();
+      };
+      if (img.complete && img.naturalWidth === 0) showFallback();
+      else img.addEventListener('error', showFallback, { once: true });
+    });
+    const signInStep = document.getElementById('signInStep');
+    const signInBtn = document.getElementById('signInBtn');
+    const linkStep = document.getElementById('linkStep');
+    const scanStep = document.getElementById('scanStep');
+    const linkQr = document.getElementById('linkQr');
+    const linkCode = document.getElementById('linkCode');
+    const userPicker = document.getElementById('userPicker');
+    const userGrid = document.getElementById('userGrid');
+    const pinForm = document.getElementById('pinForm');
+    const pinInput = document.getElementById('pinInput');
+    const statusEl = document.getElementById('status');
+    const returnTo = safeReturnPath(new URLSearchParams(location.search).get('return'), location.origin);
+
+    function setStatus(text, isError = false) {
+      statusEl.textContent = text;
+      statusEl.classList.toggle('error', isError);
+    }
+
+    function resetToSignIn() {
+      stopJellyfinPolling();
+      stopPolling();
+      linkStep.style.display = 'none';
+      userPicker.style.display = 'none';
+      document.getElementById('card').classList.remove('wide');
+      jellyfinStep.hidden = true;
+      signInStep.style.display = 'block';
+      signInBtn.disabled = false;
+      jellyfinBtn.disabled = false;
+    }
+
+    // ---- Which backends to offer ----
+    const jellyfinBtn = document.getElementById('jellyfinBtn');
+    const signInIntro = document.getElementById('signInIntro');
+    // Setup problems are shown first; working backends stay usable alongside them.
+    fetch('/api/auth/setup')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((setup) => {
+        const problems = Array.isArray(setup?.problems) ? setup.problems : [];
+        const list = document.getElementById('setupProblems');
+        list.replaceChildren(...problems.map((text) => Object.assign(document.createElement('li'), { textContent: String(text) })));
+        document.getElementById('setupError').hidden = !problems.length;
+      })
+      .catch(() => {});
+    fetch('/api/auth/sources')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((sources) => {
+        if (!Array.isArray(sources)) return;
+        if (!sources.length) {
+          // Nothing to sign in to: the setup error above says why.
+          signInStep.hidden = true;
+          return;
+        }
+        const types = new Set(sources.map((source) => source.type));
+        const jellyfin = sources.find((source) => source.type === 'jellyfin');
+        jellyfinAsksServer = !!jellyfin?.askServer;
+        // No server of this site's own to fall back to: the address is required.
+        jellyfinServerRequired = !!jellyfin?.serverRequired;
+        if (jellyfinServerRequired) {
+          document.getElementById('jellyfinServerHint').textContent = "Enter your Jellyfin server's https:// address.";
+          document.getElementById('jellyfinServer').required = true;
+        }
+        // The server plugin may word the question itself.
+        const prompt = jellyfin?.serverPrompt;
+        if (prompt?.hint) {
+          jellyfinPromptHint = prompt.hint;
+          document.getElementById('jellyfinServerHint').textContent = jellyfinServerRequired
+            ? prompt.hint : `${prompt.hint} Or leave it empty to use this site's own Jellyfin server.`;
+        }
+        if (prompt?.label) document.getElementById('jellyfinServerLabel').textContent = prompt.label;
+        if (prompt?.placeholder) document.getElementById('jellyfinServer').placeholder = prompt.placeholder;
+        signInBtn.hidden = !types.has('plex');
+        jellyfinBtn.hidden = !types.has('jellyfin');
+        signInIntro.textContent = types.size > 1 ? 'Sign in with Plex or Jellyfin.'
+          : types.has('jellyfin') ? 'Sign in with your Jellyfin account.'
+          : 'Sign in with the Plex account that has access to this server.';
+        if (suggestedServer && jellyfinAsksServer && types.has('jellyfin')) jellyfinBtn.click();
+      })
+      .catch(() => {});
+
+    // ---- Jellyfin: Quick Connect, or a password when the server has it off ----
+    const jellyfinStep = document.getElementById('jellyfinStep');
+    const jellyfinCodeStep = document.getElementById('jellyfinCodeStep');
+    const jellyfinCode = document.getElementById('jellyfinCode');
+    const jellyfinPasswordForm = document.getElementById('jellyfinPasswordForm');
+    const jellyfinServerForm = document.getElementById('jellyfinServerForm');
+    const jellyfinServer = document.getElementById('jellyfinServer');
+    const SERVER_KEY = 'freeStuffCrazyPlayer.jellyfinServer';
+    let jellyfinAsksServer = false;
+    let jellyfinPromptHint = null;
+    let jellyfinServerRequired = false;
+    let jellyfinTimer = null;
+    // A page that just set up a server (e.g. a plugin's linking page) can
+    // send people here with ?jellyfinServer=<name>. It's only filled in, never
+    // submitted: the person still sees which server they're signing in to.
+    const suggestedServer = (new URLSearchParams(location.search).get('jellyfinServer') || '').trim().slice(0, 200);
+    function stopJellyfinPolling() {
+      clearTimeout(jellyfinTimer);
+      jellyfinTimer = null;
+    }
+
+    async function pollJellyfin(attempt = 0) {
+      // Quick Connect codes expire after a few minutes.
+      if (attempt > 150) {
+        resetToSignIn();
+        setStatus('Sign-in took too long — try again.', true);
+        return;
+      }
+      try {
+        const res = await fetch('/api/auth/jellyfin/poll');
+        const data = await res.json();
+        if (!res.ok) { resetToSignIn(); setStatus(data.error || 'Sign-in failed; please retry', true); return; }
+        if (data.authenticated) {
+          setStatus('Signed in — loading…');
+          location.href = returnTo;
+          return;
+        }
+      } catch { /* try again below */ }
+      jellyfinTimer = setTimeout(() => pollJellyfin(attempt + 1), 2000);
+    }
+
+    // address: the user's own server when this install lets users bring one.
+    async function startJellyfin(address = '') {
+      setStatus('Contacting Jellyfin…');
+      try {
+        const res = await fetch('/api/auth/jellyfin/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(address ? { server: address } : {}),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `${res.status}`);
+        if (address) { try { localStorage.setItem(SERVER_KEY, address); } catch { /* not remembered */ } }
+        signInStep.style.display = 'none';
+        jellyfinStep.hidden = false;
+        jellyfinServerForm.hidden = true;
+        document.getElementById('jellyfinServerName').textContent = data.serverName || 'this server';
+        if (data.mode === 'quickconnect') {
+          jellyfinPasswordForm.hidden = true;
+          jellyfinCodeStep.hidden = false;
+          jellyfinCode.textContent = data.code;
+          setStatus('Waiting for Jellyfin approval…');
+          pollJellyfin();
+        } else {
+          jellyfinCodeStep.hidden = true;
+          jellyfinPasswordForm.hidden = false;
+          jellyfinUseQuickConnect.hidden = true;
+          setStatus('');
+          document.getElementById('jellyfinUsername').focus();
+        }
+      } catch (err) {
+        jellyfinBtn.disabled = false;
+        setStatus(`Failed to start sign-in: ${err.message}`, true);
+      }
+    }
+
+    jellyfinBtn.addEventListener('click', () => {
+      jellyfinBtn.disabled = true;
+      if (!jellyfinAsksServer) return startJellyfin();
+      // Ask for the user's own server first.
+      signInStep.style.display = 'none';
+      jellyfinStep.hidden = false;
+      jellyfinCodeStep.hidden = true;
+      jellyfinPasswordForm.hidden = true;
+      jellyfinServerForm.hidden = false;
+      try { jellyfinServer.value = suggestedServer || localStorage.getItem(SERVER_KEY) || ''; } catch { jellyfinServer.value = suggestedServer; }
+      setStatus('');
+      jellyfinServer.focus();
+    });
+
+    jellyfinServerForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const address = jellyfinServer.value.trim();
+      // Which addresses are allowed is decided on the server, which explains
+      // any refusal, so only an empty field is caught here.
+      if (jellyfinServerRequired && !address) { setStatus(jellyfinPromptHint || "Enter your Jellyfin server's https:// address.", true); return; }
+      try { if (!address) localStorage.removeItem(SERVER_KEY); } catch { /* nothing remembered */ }
+      startJellyfin(address);
+    });
+
+    jellyfinPasswordForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      setStatus('Signing in…');
+      try {
+        const res = await fetch('/api/auth/jellyfin/password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('jellyfinUsername').value,
+            password: document.getElementById('jellyfinPassword').value,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.authenticated) throw new Error(data.error || 'Sign-in failed');
+        setStatus('Signed in — loading…');
+        location.href = returnTo;
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    });
+
+    // Switch between Quick Connect and a password on the same server. The
+    // Quick Connect code stays valid meanwhile, so switching back resumes it.
+    const jellyfinUseQuickConnect = document.getElementById('jellyfinUseQuickConnect');
+    document.getElementById('jellyfinUsePassword').addEventListener('click', () => {
+      stopJellyfinPolling();
+      jellyfinCodeStep.hidden = true;
+      jellyfinPasswordForm.hidden = false;
+      jellyfinUseQuickConnect.hidden = false;
+      setStatus('');
+      document.getElementById('jellyfinUsername').focus();
+    });
+    jellyfinUseQuickConnect.addEventListener('click', () => {
+      jellyfinPasswordForm.hidden = true;
+      jellyfinUseQuickConnect.hidden = true;
+      jellyfinCodeStep.hidden = false;
+      setStatus('Waiting for Jellyfin approval…');
+      pollJellyfin();
+    });
+
+    document.getElementById('jellyfinBack').addEventListener('click', () => { resetToSignIn(); setStatus(''); });
+    document.querySelectorAll('.plexBack').forEach((button) => button.addEventListener('click', () => { resetToSignIn(); setStatus(''); }));
+
+    let pollTimer = null;
+    function stopPolling() {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+
+    async function poll(pinId, attempt = 0) {
+      // Plex PINs are normally good for ~15 minutes; give up well before
+      // that so a stuck tab doesn't poll forever.
+      if (attempt > 150) {
+        stopPolling();
+        resetToSignIn();
+        setStatus('Sign-in took too long — try again.', true);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/auth/plex/poll?id=${encodeURIComponent(pinId)}`);
+        const data = await res.json();
+        if (!res.ok) {
+          stopPolling(); resetToSignIn(); setStatus(data.error || 'Sign-in failed; please retry', true); return;
+        }
+        if (data.authenticated) {
+          setStatus('Signed in — loading…');
+          location.href = returnTo;
+          return;
+        }
+        if (data.needsUserSelection) {
+          // A Plex Home with more than one profile -- stop polling and let
+          // the person pick, same as Plex's own apps would show.
+          stopPolling();
+          setStatus('');
+          showUserPicker(data.pinId, data.users);
+          return;
+        }
+        if (data.pending === false) {
+          // Signed in to plex.tv, but not authorized for this server.
+          stopPolling();
+          resetToSignIn();
+          setStatus(data.error || 'Not authorized for this server.', true);
+          return;
+        }
+        pollTimer = setTimeout(() => poll(pinId, attempt + 1), 2000);
+      } catch (err) {
+        pollTimer = setTimeout(() => poll(pinId, attempt + 1), 2000);
+      }
+    }
+
+    function showUserPicker(pinId, users) {
+      signInStep.style.display = 'none';
+      linkStep.style.display = 'none';
+      userPicker.style.display = 'block';
+      document.getElementById('card').classList.add('wide');
+      userGrid.innerHTML = '';
+      pinForm.style.display = 'none';
+      let selectedUser = null;
+
+      for (const user of users) {
+        const tile = document.createElement('button');
+        tile.className = 'userTile';
+        tile.type = 'button';
+
+        function addFallbackAvatar() {
+          const fallback = document.createElement('div');
+          fallback.className = 'avatarFallback';
+          fallback.textContent = (user.title || '?').slice(0, 1).toUpperCase();
+          tile.appendChild(fallback);
+        }
+
+        if (user.thumb) {
+          const img = document.createElement('img');
+          img.src = user.thumb;
+          img.alt = user.title;
+          img.onerror = () => { img.remove(); addFallbackAvatar(); };
+          tile.appendChild(img);
+        } else {
+          addFallbackAvatar();
+        }
+
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.textContent = user.title;
+        if (user.protected) title.append(' ', iconEl('lock'));
+        tile.appendChild(title);
+
+        tile.addEventListener('click', () => {
+          selectedUser = user;
+          if (user.protected) {
+            pinForm.style.display = 'block';
+            pinInput.value = '';
+            pinInput.focus();
+          } else {
+            selectUser(pinId, user);
+          }
+        });
+        userGrid.appendChild(tile);
+      }
+
+      pinForm.onsubmit = (ev) => {
+        ev.preventDefault();
+        if (selectedUser) selectUser(pinId, selectedUser, pinInput.value.trim());
+      };
+    }
+
+    async function selectUser(pinId, user, pin) {
+      setStatus('Signing in…');
+      try {
+        const res = await fetch('/api/auth/plex/select-user', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pinId, userId: user.id, pin }),
+        });
+        const data = await res.json();
+        if (data.authenticated) {
+          setStatus('Signed in — loading…');
+          location.href = returnTo;
+        } else {
+          setStatus(data.error || 'Sign-in failed', true);
+        }
+      } catch (err) {
+        setStatus(`Sign-in failed: ${err.message}`, true);
+      }
+    }
+
+    signInBtn.addEventListener('click', async () => {
+      signInBtn.disabled = true;
+      setStatus('Requesting a code…');
+      try {
+        const res = await fetch('/api/auth/plex/pin', { method: 'POST' });
+        if (!res.ok) throw new Error(`${res.status}`);
+        const { id, code, qrCode } = await res.json();
+        scanStep.hidden = !qrCode;
+        if (qrCode) linkQr.src = qrCode;
+        else linkQr.removeAttribute('src');
+        linkCode.textContent = code;
+        signInStep.style.display = 'none';
+        linkStep.style.display = 'block';
+        setStatus('Waiting for Plex sign-in…');
+        poll(id);
+      } catch (err) {
+        signInBtn.disabled = false;
+        setStatus(`Failed to start sign-in: ${err.message}`, true);
+      }
+    });
+  </script>
+  <footer id="credit"><a href="https://freestuffcrazy.com" rel="noopener">A FreeStuffCrazy project</a></footer>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "name": "mediabunny",
+  "version": "1.65.0",
+  "license": "MPL-2.0",
+  "file": "public/vendor/mediabunny.mjs",
+  "sha256": "65a111aadcb9a8b45e585f128d11daf3c972289bf6c58b2e795ba6073ee13363",
+  "sourceCommit": "cd6612380c7e3f1261d74b9b550e6fc3b65a53bc",
+  "sourceUrl": "https://github.com/Vanilagy/mediabunny/tree/cd6612380c7e3f1261d74b9b550e6fc3b65a53bc",
+  "distribution": "https://registry.npmjs.org/mediabunny/-/mediabunny-1.65.0.tgz",
+  "verification": "Local bundle version and checksum recorded; registry byte comparison pending network-enabled verification."
+}

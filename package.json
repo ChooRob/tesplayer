@@ -1,0 +1,27 @@
+{
+  "name": "freestuffcrazy-player",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test test/*.test.js",
+    "vendor:verify": "node scripts/verify-vendor.mjs",
+    "vendor:verify:upstream": "node scripts/verify-vendor.mjs --upstream",
+    "check:release": "node scripts/check-release.mjs",
+    "release:source": "node scripts/release-source.mjs"
+  },
+  "dependencies": {
+    "@simplewebauthn/browser": "13.3.0",
+    "@simplewebauthn/server": "13.3.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "hls.js": "^1.7.4",
+    "qrcode-generator": "2.0.4"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  }
+}

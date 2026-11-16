@@ -1,0 +1,15 @@
+{
+  "auth": {
+    "enabled": true,
+    "requireServerAccess": true,
+    "sessionDays": 30,
+    "maxSessions": 1000
+  },
+  "plex": {
+    "productName": "FreeStuffCrazy Player",
+    "videoBitrate": 4000,
+    "maxSessions": 8,
+    "sessionIdleMinutes": 30,
+    "profileAccountIds": {}
+  }
+}
