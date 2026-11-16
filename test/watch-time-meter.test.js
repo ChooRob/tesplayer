@@ -119,3 +119,19 @@ test('a loading player holds its stream slot during the startup grace', async ()
   time = 40000;
   await assert.rejects(meter.begin({ viewer: 'second', accountKey: 'a', playbackId: 'two' }), { code: 'ACCOUNT_STREAM_LIMIT' });
 });
+test('activeStreams lists only streams that are playing right now, by account', async () => {
+  let time = 0;
+  const meter = createWatchTimeMeter({ now: () => time, recordUsage: async () => {}, getQuotaStatus: async () => ({ remainingSeconds: 1000 }) });
+  const start = (viewer, accountKey) => meter.begin({ viewer, accountKey, playbackId: `p-${viewer}` });
+  await start('a', 'plex:1'); await start('b', 'jellyfin:x:y'); await start('c', 'plex:2');
+  assert.deepEqual(meter.activeStreams(), [], 'a stream that has not reported playing is not counted');
+  await meter.heartbeat('a', 'p-a', 'playing');
+  await meter.heartbeat('b', 'p-b', 'playing');
+  await meter.heartbeat('c', 'p-c', 'paused');
+  assert.deepEqual(meter.activeStreams().map(stream => stream.accountKey).sort(), ['jellyfin:x:y', 'plex:1']);
+  assert.deepEqual(Object.keys(meter.activeStreams()[0]), ['accountKey'], 'nothing but the key is exposed');
+  await meter.heartbeat('a', 'p-a', 'stopped');
+  assert.deepEqual(meter.activeStreams().map(stream => stream.accountKey), ['jellyfin:x:y']);
+  time += 60000;
+  assert.deepEqual(meter.activeStreams(), [], 'a stream whose heartbeats stopped is no longer counted');
+});

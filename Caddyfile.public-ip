@@ -1,0 +1,8 @@
+{$APP_ORIGIN} {
+    tls {
+        issuer acme {
+            profile shortlived
+        }
+    }
+    reverse_proxy freestuffcrazy-player:3000
+}

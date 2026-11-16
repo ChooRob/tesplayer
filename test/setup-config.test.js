@@ -22,8 +22,10 @@ test('JELLYFIN_URL accepts a server address and rejects anything else', () => {
 const plex = { id: 'plex', type: 'plex' };
 const jellyfin = { id: 'jellyfin', type: 'jellyfin' };
 
-test('single tenant: Plex needs PLEX_EMAIL and PLEX_TOKEN, Jellyfin needs JELLYFIN_URL', () => {
+test('single tenant: Plex needs PLEX_EMAIL (PLEX_TOKEN is optional), Jellyfin needs JELLYFIN_URL', () => {
   assert.deepEqual(checkSourceConfig({ PLEX_EMAIL: 'Me@Example.com', PLEX_TOKEN: 't' }), { configured: [plex], problems: [], warnings: [] });
+  // With no PLEX_TOKEN the server is found and saved when that account first signs in.
+  assert.deepEqual(checkSourceConfig({ PLEX_EMAIL: 'me@example.com' }), { configured: [plex], problems: [], warnings: [] });
   assert.deepEqual(checkSourceConfig({ JELLYFIN_URL: 'http://192.168.1.50:8096' }), { configured: [jellyfin], problems: [], warnings: [] });
   assert.deepEqual(checkSourceConfig({ PLEX_EMAIL: 'me@example.com', PLEX_TOKEN: 't', JELLYFIN_URL: 'https://jf.example' }).configured, [plex, jellyfin]);
   // A token alone is not a Plex setup without a plugin choosing servers; it is logged, not shown.
@@ -41,7 +43,9 @@ test('each setup error names the setting at fault, and only errors stop sign-in'
   for (const bad of ['me', 'me@', '@example.com', 'me@example', 'me @example.com']) {
     assert.deepEqual(checkSourceConfig({ PLEX_EMAIL: bad, PLEX_TOKEN: 't' }).problems, [PLEX_EMAIL_FORMAT], bad);
   }
-  assert.deepEqual(checkSourceConfig({ PLEX_EMAIL: 'me@example.com' }).problems, [PLEX_TOKEN_MISSING]);
+  // A plugin that chooses servers has no owner sign-in to learn the token from.
+  assert.deepEqual(checkSourceConfig({ PLEX_EMAIL: 'me@example.com' }, [{ resolveServer() {} }]).problems, [PLEX_TOKEN_MISSING]);
+  assert.deepEqual(checkSourceConfig({ PLEX_EMAIL: 'me@example.com', PLEX_TOKEN: 't' }, [{ resolveServer() {} }]).configured, [plex]);
   // A bad setting is reported even when the other backend works, which stays usable.
   const badJellyfin = checkSourceConfig({ PLEX_EMAIL: 'me@example.com', PLEX_TOKEN: 't', JELLYFIN_URL: 'jellyfin.local:8096' });
   assert.deepEqual(badJellyfin.configured, [plex]);

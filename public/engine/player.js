@@ -14,6 +14,9 @@ import { SegmentPrefetcher } from './segment-prefetch.js';
 const AUDIO_CAPACITY_SECONDS = 16;
 // Some HLS starts expose less than six seconds before video consumption begins.
 const AUDIO_START_SECONDS = 2;
+// A read that fails this close to the end of a stream, after everything before it
+// was decoded, is the end of the stream (a cut-off final packet), not a failure.
+const STREAM_END_TOLERANCE_SECONDS = 5;
 const AUDIO_REBUFFER_SECONDS = 1;
 // After running dry mid-playback, rebuild a real cushion before resuming.
 // Resuming at the 2-second startup mark on a slow link flickers between
@@ -406,7 +409,13 @@ export class Player {
     }
   }
 
+  atStreamEnd(decodedUntil) {
+    return !this.isLive && Number.isFinite(this.duration) && this.duration > 0
+      && decodedUntil > 0 && this.duration - decodedUntil <= STREAM_END_TOLERANCE_SECONDS;
+  }
+
   async produceVideo(generation, iterator) {
+    let decodedUntil = 0;
     try {
       while (generation === this.generation && !this.destroyed) {
         while (this.videoQueue.length >= this.videoQueueCapacity) {
@@ -421,14 +430,18 @@ export class Player {
         }
         this.videoQueue.push(result.value);
         this.videoDecodeCount += 1;
+        decodedUntil = result.value.timestamp + (result.value.duration || 0);
       }
     } catch (err) {
-      if (generation === this.generation && !this.destroyed) this.fail(err);
+      if (generation !== this.generation || this.destroyed) return;
+      if (this.atStreamEnd(decodedUntil)) this.videoEnded = true;
+      else this.fail(err);
     }
   }
 
   async produceAudio(generation, mediaTime, iterator) {
     let nextFrame = 0;
+    let decodedUntil = 0;
     const shouldContinue = () => generation === this.generation && !this.destroyed;
     try {
       while (generation === this.generation && !this.destroyed) {
@@ -456,10 +469,15 @@ export class Player {
           if (!wrote) return;
           this.audioWriteWaitMs += performance.now() - writeStartedAt;
           nextFrame = endFrame;
+          decodedUntil = sample.timestamp + sample.numberOfFrames / sample.sampleRate;
         } finally { sample.close(); }
       }
     } catch (err) {
-      if (generation === this.generation && !this.destroyed) this.fail(err);
+      if (generation !== this.generation || this.destroyed) return;
+      if (this.atStreamEnd(decodedUntil)) {
+        this.audioEnded = true;
+        this.audioRing.markEnded();
+      } else this.fail(err);
     }
   }
 
@@ -470,7 +488,21 @@ export class Player {
       this.onStateChange(this.state, { audioResumeBlocked: true });
       return;
     }
+    // Pressing play after the end starts again from the beginning.
+    if (this.state === 'ended') { await this.seek(0); return; }
     this.updatePlaybackBarrier();
+  }
+
+  // A movie or episode is over once both tracks have been read to the end and
+  // everything decoded has been shown and heard. The page moves on from here.
+  finishIfPlayedOut() {
+    if (this.isLive || this.seeking || this.state !== 'playing') return;
+    if (!this.videoEnded || !this.audioEnded || this.videoQueue.length) return;
+    if (this.audioRing && this.audioRing.availableFrames > 0) return;
+    this.wantsPlayback = false;
+    this.audioRing?.setRunning(false);
+    this.clock.stop();
+    this.setState('ended');
   }
 
   pause() {
@@ -496,6 +528,7 @@ export class Player {
     const videoPresentationTime = this.getVideoPresentationTime(mediaTime);
     this.renderVideo(videoPresentationTime);
     this.updatePlaybackBarrier();
+    this.finishIfPlayedOut();
 
     if (now - this.lastStatsAt < 250) return;
     this.lastStatsAt = now;

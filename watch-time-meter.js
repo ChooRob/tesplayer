@@ -76,5 +76,12 @@ export function createWatchTimeMeter({recordUsage,getQuotaStatus,getStreamLimit=
     await settle(entry);viewers.delete(viewer);
   }
   async function close() {await tick();viewers.clear();}
-  return {begin,heartbeat,tick,stop,close,atStreamLimit};
+  // Streams playing right now (not paused, expired or out of time), one entry
+  // per viewer; only the account key is given.
+  function activeStreams() {
+    return [...viewers.values()]
+      .filter(entry=>entry.state==='playing' && !entry.exhausted && !entry.expired && now()<=liveUntil(entry))
+      .map(entry=>({accountKey:entry.accountKey}));
+  }
+  return {begin,heartbeat,tick,stop,close,atStreamLimit,activeStreams};
 }

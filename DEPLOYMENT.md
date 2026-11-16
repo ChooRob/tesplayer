@@ -1,43 +1,56 @@
-# Running FreeStuffCrazy Player securely
+# Run with Docker Compose
 
-Local development: `npm ci`, configure `.env`, then `npm start`. The default listener is `127.0.0.1:3000`. HTTP is supported for local development; remote deployments should use the production setup below. SESSION_SECRET must be a randomly generated value of at least 32 characters. Do not use the example credentials.
+This guide is for running your own copy. To use the hosted player instead, see [Try the hosted player](README.md#try-the-hosted-player-before-you-self-host).
 
-## Admin plugins
+```text
+Your browser ──HTTPS──► Caddy :443 ──private Docker network──► Player :3000
+```
 
-By default the admin is the owner profile of the `PLEX_EMAIL` account, or an administrator of the `JELLYFIN_URL` server (as Jellyfin reports it; users' own servers never count). To name one administrator instead, which you need with plugins that let users choose their server, set `FREESTUFFCRAZY_ADMIN`, prefixed with the backend they sign in with: `plex:<confirmed Plex email>` for the Plex Home owner with that email, or `jellyfin:<user ID>:<username>` for a Jellyfin user. Both the Jellyfin user ID (shown as `userId=` in the address bar when you open the user under Dashboard › Users) and the username must match the signed-in user; with `FREESTUFFCRAZY_ADMIN` set, a Jellyfin administrator role alone does not make someone a FreeStuffCrazy Player admin. Set `FREESTUFFCRAZY_ADMIN_TOKEN_SHA256` to the SHA-256 hex digest of a separate 32-byte random token encoded as 64 hex characters. Keep the raw token in a password manager.
+Compose starts the player and Caddy. Only Caddy opens host ports; it obtains and renews certificates. [Caddy's HTTPS guide](https://caddyserver.com/docs/automatic-https) explains its certificate behavior.
 
-The configured admin can open **Admin** from the username menu when at least one plugin registers an admin tab. Unlock Admin with a passkey. Passkeys require an HTTPS `APP_ORIGIN` and are scoped to that origin. An unlock lasts 15 minutes and is bound to the current login session.
+## Set up
 
-Set `FREESTUFFCRAZY_ADMIN_ALLOW_TOKEN=true` to allow token unlock and passkey enrollment. Best practice is to set it back to `false` and restart after enrolling a passkey. Passkey unlock works in either mode. Admin APIs require an unlocked session.
+1. Install Docker with the Compose plugin. Make sure this machine can reach your Plex or Jellyfin server.
+2. Copy the sample settings:
 
-A plugin registers its tab through `context.admin.registerTab({ id, label, file })` in its `registerRoutes` hook. Use a unique lowercase ID and the absolute path to a browser module that exports `mount(container)`. The page gives each tab its own shadow root. A duplicate ID returns `false` and the original tab keeps its slot. Serve privileged plugin APIs under `/api/admin/<plugin-id>/` so the app checks both the admin's session and the admin unlock on every request.
+   ```sh
+   cp .env.example .env
+   cp config.example.json config.json
+   ```
 
-Production requires `NODE_ENV=production`, an HTTPS `APP_ORIGIN` (for example `https://dash.example.com`), and an HTTPS reverse proxy. Configure `TRUST_PROXY` with only that proxy's actual IP address/CIDR. The proxy must replace forwarded headers, set `X-Forwarded-Proto: https`, and preserve Host. Do not set trust proxy to an unrestricted network. Without trusted HTTPS, the server deliberately rejects production requests.
+3. Edit `.env`. Set `APP_ORIGIN` to the HTTPS address viewers will open. Replace `SESSION_SECRET=changeme` with a random value; `openssl rand -hex 32` can generate one. For Plex, set the owner's `PLEX_EMAIL`. For Jellyfin, set `JELLYFIN_URL`. If the Plex account owns multiple servers, set `PLEX_URL` to the one you want.
+4. Follow the address-specific steps below, then start the containers:
 
-Docker Compose publishes only on host loopback, runs as a non-root user, mounts config read-only, and stores private state in the `freestuffcrazy-player-data` volume. Set APP_ORIGIN and TRUST_PROXY in `.env` before `docker compose up --build -d`. A host proxy connects to localhost; a container proxy can join the app's private network. If the proxy is remote, explicitly configure host/interface exposure and firewall it to the proxy. This change does not install a reverse proxy or provision certificates.
+   ```sh
+   chmod 600 .env
+   docker compose up --build -d
+   ```
 
-The image uses Node 24 LTS. Runtime support reference: [official Node.js release table](https://nodejs.org/en/about/previous-releases). Rebuild regularly to pick up Node and OS/FFmpeg security updates. Run `npm audit` with registry access before releasing.
+5. Open `APP_ORIGIN` in a browser. For startup errors, run `docker compose logs -f caddy freestuffcrazy-player`.
 
-Sessions are stateless. Each signed-in browser holds its Plex tokens in an HttpOnly cookie encrypted with AES-256-GCM using a key derived from `SESSION_SECRET`; the server stores no tokens and no session list, so several servers sharing one `SESSION_SECRET` accept each other's sessions. A session lasts 30 days (`auth.sessionDays`) and is renewed at most once a day while in use. Log out clears only that browser's cookie. **Log out on all devices** in the username menu rejects every cookie issued to that Plex account, using a per-account counter in the `signout-generations` storage collection (account IDs and numbers only). Servers must share storage for this to reach every server. Changing `SESSION_SECRET` signs everyone out. Versions before stateless sessions kept tokens in `.sessions.json`; the server deletes that file at startup, so those users sign in once more. Production always requires Secure cookies. Development also sets Secure when accessed over HTTPS. HttpOnly and SameSite=Lax remain enabled; Lax permits Tesla's cross-site fullscreen return. Per-device playback settings are preserved independently of session state.
+### Domain name (recommended)
 
-Saved state (watch history, admin passkeys, sign-out counters and plugin data) goes through the storage interface in `storage.js`, which stores each collection as `.<name>.json`, written atomically with mode 0600 under DATA_DIR (defaults to the project directory outside Docker). To use a database instead, add a plugin whose `createStore({ dataDir })` returns a store implementing the same collection interface. The first such plugin is used, startup fails if it is missing a method, and nothing else reads or writes these files. Have the new backend import each existing `.<name>.json` the first time a collection is empty. Existing files are chmodded when read. `.env` must also remain mode 0600. If migrating an existing installation into Docker, copy `.local-finished.json` and `.installation.json`, if present, into the data volume as the container's node user; old sessions intentionally cannot be reused. Back up that volume securely. Credentials are not copied into the image/build context.
+Set `APP_ORIGIN=https://player.example.com`. Point its DNS record to this machine and allow inbound TCP 80 and 443. The included `Caddyfile` obtains a browser-trusted certificate and redirects HTTP to HTTPS. UDP 443 is optional for HTTP/3.
 
-Plex client identity is generated once and persisted in `.installation.json`; PLEX_CLIENT_ID can override it. PLEX_SERVER_ID selects a particular owned Plex server when discovery is used. PLEX_URL remains the preferred endpoint; configure HTTPS for Plex when traffic crosses an untrusted network.
+### Public IP address
 
-`config.example.json` documents configurable Plex quality and session limits. Protocol constants, codec buffer tuning, UI layout, official integration endpoints and Tesla detection are intentional implementation constants, not secrets. They have not been turned into user-facing settings.
+[Let's Encrypt issues publicly trusted IP certificates](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability), but Caddy's default IP certificate comes from its own CA and is not trusted by other devices. To use a public IP without a domain:
 
-PMS account IDs can differ from cloud Home-profile IDs. The app re-fetches the selected profile by immutable ID before mapping accounts; it never uses the client/session display name for authorization. It first uses an explicit `plex.profileAccountIds` mapping, then an exact ID match; display names are never used as an authorization fallback. For installations with unusual mappings, configure `"profileAccountIds": { "cloud-profile-id": "pms-account-id" }`. Every admin-derived next-up result must also pass a current-profile item lookup.
+1. Set `APP_ORIGIN=https://YOUR_PUBLIC_IP` in `.env`. The IP must reach this machine on TCP 80 or 443; forward those ports through your router if needed.
+2. Run `cp Caddyfile.public-ip Caddyfile` before `docker compose up --build -d`.
+3. Keep the `caddy-data` volume. IP certificates last about six days; Caddy must be able to renew them automatically.
 
-Security headers include a CSP that hashes the inline scripts on server startup, blocks framing and inline event handlers, and permits local modules, canvas workers and blob media. Restart the server after changing HTML scripts so the hashes match.
+The public-IP Caddyfile explicitly selects Let's Encrypt's `shortlived` ACME profile. Use a stable public IP; if it changes, update `APP_ORIGIN` and restart. [Caddy's ACME profile documentation](https://caddyserver.com/docs/caddyfile/directives/tls#acme) describes this setting.
 
-The player uses a local Mediabunny bundle; there is no runtime jsDelivr dependency. Its version, checksum and upstream source are recorded in vendor.json and THIRD-PARTY-NOTICES.md. Run vendor:verify:upstream with registry access before releasing.
+### Private LAN IP address
 
-### Direct Plex media delivery
+**This will not work in a Tesla.** Its browser cannot trust Caddy's local CA. Use a domain, a public IP certificate, or the [hosted player](README.md#try-the-hosted-player-before-you-self-host) for the car.
 
-The current player tries direct media delivery for signed-in viewers whose selected Plex connection is HTTPS. The dashboard continues serving and validating HLS playlists; media and initialization segments go straight from Plex to the browser, using the viewer's session Plex token in `X-Plex-Token` query parameters. Plex still performs any required transcoding.
+Set `APP_ORIGIN=https://192.168.1.10` (replace the address with your own) and keep the default `Caddyfile`. After Caddy starts, copy its CA certificate with `docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt ./caddy-root.crt`. Install it as a trusted root on each viewing device; devices where you cannot do that will reject the site.
 
-The player response allows only that viewer's selected Plex origin in CSP and uses `Cache-Control: private, no-store`. Preserve those headers at reverse proxies. Plex must be reachable from the client and allow cross-origin media requests; the player retains its cross-origin isolation headers. HTTP connections and clients without a session token retain proxy delivery. The selected connection is used as-is; this feature does not discover a different public address for a LAN-only connection.
+## Keep it running
 
-Initial direct failures retry through the dashboard proxy. Later player errors reload once with `delivery=proxy` and the current playback position. Add `delivery=proxy` to the player URL to force relay delivery for troubleshooting. Direct Canvas fetches have a 15-second request timeout.
-
-Direct playback exposes the viewer's Plex token to their browser and the Plex endpoint's URL logs. It is not a one-stream credential. Never use a shared administrator login for untrusted viewers; use their own Plex profiles/accounts. The installation fallback token is never emitted for anonymous playback. Server-side progress/session management remains active, but direct media requests bypass the dashboard's per-segment authorization and expiration checks. Stopping a dashboard session does not revoke the viewer's Plex token.
+- Update with `docker compose pull caddy` and `docker compose up --build -d`.
+- Back up the `freestuffcrazy-player-data` and `caddy-data` volumes, plus `.env` and `config.json`. The player volume may hold the Plex token saved at first sign-in, so protect it like `.env`. Losing `SESSION_SECRET` signs everyone out.
+- Logs stay small in production. The server's output has startup, setup problems and failures, not every playback report. `access.log` in the data volume records page loads, sign-in and other deliberate actions, and errors, with each client's IP address; it rotates at about 5 MB to `access.1.log`. `canvas-health.log` keeps buffering and error reports, up to 1 MB.
+- The private Docker subnet is `172.30.241.0/24`, with Caddy at `172.30.241.2`. If it conflicts with your network, change the subnet, both service addresses, and `TRUST_PROXY` together in `docker-compose.yml`.

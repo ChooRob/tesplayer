@@ -74,7 +74,7 @@ export const tenantServersOf = plugins => plugins.find(plugin => typeof plugin.j
 // returns what to type to sign in to that server, when the URL itself isn't it.
 // With that plugin JELLYFIN_URL is
 // optional; without one, every user must give theirs.
-export async function createJellyfinSource({ id = 'jellyfin', config, plugins = [], store, pipeUpstream, env = process.env, fetchImpl = (...args) => fetch(...args) }) {
+export async function createJellyfinSource({ id = 'jellyfin', config, plugins = [], store, pipeUpstream, env = process.env, fetchImpl = (...args) => fetch(...args), signedIn = null }) {
   const tenantServers = tenantServersOf(plugins);
   if (!env.JELLYFIN_URL && !tenantServers) throw new Error('Missing JELLYFIN_URL in environment');
   let baseUrl = null;
@@ -264,6 +264,7 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
     }
     writeSessionCookie(res, { sid: crypto.randomBytes(16).toString('hex'), credential });
     res.clearCookie(LOGIN_COOKIE_NAME, cookieOptions(res));
+    signedIn?.({ sourceType: 'jellyfin', userKey: `jellyfin:${info.id}:${credential.userId}` });
   }
 
   // The sign-in in progress (Quick Connect secret and device ID) lives in its

@@ -57,7 +57,13 @@ const store = await openStore({ plugins, dataDir });
 const { configured, problems: setupProblems, warnings: setupWarnings } = checkSourceConfig(process.env, plugins);
 for (const problem of setupProblems) console.error(`Setup: ${problem}`);
 for (const warning of setupWarnings) console.warn(`Setup: ${warning}`);
-const sources = await createSources({ plugins, configured, context: { config, plugins, store, pipeUpstream } });
+// Plugins may watch (never change) two things: a viewer signing in, and watch
+// time being counted. A listener that throws is ignored; it can't affect playback.
+const signInListeners = [];
+const usageListeners = [];
+const notify = (listeners, ...args) => { for (const listener of listeners) { try { listener(...args); } catch { /* observers cannot break the player */ } } };
+const signedIn = event => notify(signInListeners, event);
+const sources = await createSources({ plugins, configured, context: { config, plugins, store, pipeUpstream, signedIn } });
 const sourceList = [...sources.values()];
 const defaultSource = sourceList[0];
 const plexSource = sourceList.find(source => source.type === 'plex') || null;
@@ -308,7 +314,10 @@ async function exceededQuota(accountKey) {
 const liveResponses = new Map();
 const watchTimeMeter = createWatchTimeMeter({
   maximum: config.auth.maxSessions,
-  recordUsage: (key,seconds) => firstPluginWith(plugins,'recordUsage')?.recordUsage(key,seconds),
+  recordUsage: async (key,seconds) => {
+    await firstPluginWith(plugins,'recordUsage')?.recordUsage(key,seconds);
+    notify(usageListeners,key,seconds);
+  },
   getQuotaStatus: key => firstPluginWith(plugins,'getQuotaStatus')?.getQuotaStatus(key),
   getStreamLimit: key => firstPluginWith(plugins,'getStreamLimit')?.getStreamLimit(key),
 });
@@ -349,19 +358,30 @@ async function beginWatchTime(req,res) {
   }
 }
 
+// A deploy script needs to know whether anyone is watching, and the production
+// access log no longer records playback heartbeats, so a player reporting that it
+// is playing refreshes this file's modification time (at most every 10 seconds).
+let lastPlaybackMark=0;
+function markPlaybackActive(){
+  const at=Date.now();
+  if(at-lastPlaybackMark<10000)return;
+  lastPlaybackMark=at;
+  try{writeFileSync(path.join(dataDir,'.playback-active'),String(at),{mode:0o600});}catch{ /* only a courtesy to deploy scripts */ }
+}
 app.post('/api/playback/usage',async(req,res)=>{
   const {playbackId,state}=req.body || {};
   if(typeof playbackId!=='string' || !/^[a-zA-Z0-9-]{1,100}$/.test(playbackId) || !['playing','paused','stopped'].includes(state))return res.status(400).json({error:'Valid playback ID and state required'});
+  if(state==='playing')markPlaybackActive();
   try {
     // Without a limit plugin nothing is metered, so beginWatchTime never
     // registered this playback; there is no session that could have expired.
     if(!(await accountKeyForRequest(req)))return res.json({ok:true,quota:null});
     const result=await watchTimeMeter.heartbeat(viewerFor(req),playbackId,state);
     if(result.exhausted)return res.status(403).json({error:'Playback time limit reached',code:'QUOTA_EXCEEDED',resetAt:result.quota?.resetAt});
-    if(result.expired){console.warn('[playback-lease] expired',playbackId);return res.status(409).json({error:'Playback heartbeat expired',code:'PLAYBACK_EXPIRED'});}
+    if(result.expired){if(PLAYBACK_DIAGNOSTICS)console.warn('[playback-lease] expired',playbackId);return res.status(409).json({error:'Playback heartbeat expired',code:'PLAYBACK_EXPIRED'});}
     if(result.stale){
       const code=result.replaced?'ACCOUNT_STREAM_LIMIT':'PLAYBACK_EXPIRED';
-      console.warn('[playback-lease] stale',playbackId,code);
+      if(PLAYBACK_DIAGNOSTICS)console.warn('[playback-lease] stale',playbackId,code);
       return res.status(409).json({error:'Playback session changed',code});
     }
     res.json({ok:true,quota:publicQuota(result.quota)});
@@ -409,18 +429,27 @@ app.post('/api/playback/canvas-health', rateLimit({ maximum: 12, windowMs: 60000
   if (PLAYBACK_DIAGNOSTICS && typeof body.audioSinkId === 'string' && /^(type:)?[\w.:-]{0,100}$/.test(body.audioSinkId)) {
     metrics.audioSinkId = body.audioSinkId;
   }
+  // Why a stream failed, for the log; anything not plain printable text is skipped.
+  if (body.state === 'error' && typeof body.error === 'string' && /^[\x20-\x7e]{1,160}$/.test(body.error)) {
+    metrics.error = body.error;
+  }
   if (body.quality != null) {
     if (!QUALITY_LEVELS.includes(body.quality)) return res.status(400).end();
     metrics.quality = body.quality;
   }
   const line = JSON.stringify({ at: new Date().toISOString(), playbackId: body.playbackId, state: body.state,
     live: body.live === true, ...metrics });
-  console.info('[canvas-health]', line);
-  try {
-    const logPath = path.join(dataDir, 'canvas-health.log');
-    if (existsSync(logPath) && statSync(logPath).size > 1024 * 1024) writeFileSync(logPath, '', { mode: 0o600 });
-    appendFileSync(logPath, line + '\n', { mode: 0o600 });
-  } catch (err) { console.warn(`Could not write Canvas health log: ${safeError(err)}`); }
+  // In production only the reports that matter are kept: every failure on the
+  // console, and every report that is not a healthy "playing" sample in the file.
+  // Outside production every report goes to both, for debugging.
+  if (PLAYBACK_DIAGNOSTICS || body.state === 'error') console.info('[canvas-health]', line);
+  if (PLAYBACK_DIAGNOSTICS || body.state !== 'playing') {
+    try {
+      const logPath = path.join(dataDir, 'canvas-health.log');
+      if (existsSync(logPath) && statSync(logPath).size > 1024 * 1024) writeFileSync(logPath, '', { mode: 0o600 });
+      appendFileSync(logPath, line + '\n', { mode: 0o600 });
+    } catch (err) { console.warn(`Could not write Canvas health log: ${safeError(err)}`); }
+  }
   res.status(204).end();
 });
 
@@ -473,6 +502,11 @@ const pluginRouteContext = {
   // Save plugin state through store.collection(name); dataDir is for logs and caches only.
   dataDir, store, admin,
   beginWatchTime,
+  // Read-only views for stats plugins: sign-ins ({ sourceType, userKey }), watch
+  // time as it is counted (accountKey, seconds), and who is playing right now.
+  onSignIn: listener => { if (typeof listener === 'function') signInListeners.push(listener); },
+  onUsage: listener => { if (typeof listener === 'function') usageListeners.push(listener); },
+  activeStreams: () => watchTimeMeter.activeStreams(),
   markMutatingPath: (p) => extraMutatingPaths.add(p),
 };
 for (const p of plugins) await p.registerRoutes?.(app, pluginRouteContext);

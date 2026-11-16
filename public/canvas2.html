@@ -525,8 +525,17 @@
       // leaving is never treated as a failure to recover from.
       let leaving = false;
       window.addEventListener('beforeunload', () => { leaving = true; });
+      // An error in the last stretch of an episode is not worth reloading for:
+      // move on to the next one rather than leave the viewer stuck at the end.
+      const NEAR_END_SECONDS = 30;
       function recoverFromError() {
         if (leaving) return;
+        const remaining = player.duration - player.clock.currentTime;
+        if (nextEpisode && Number.isFinite(remaining) && remaining <= NEAR_END_SECONDS) {
+          hideBanner();
+          startNextCountdown();
+          return;
+        }
         if (directAttempt) return fallbackToProxy();
         if (recentlyRecovered()) {
           showBanner('Playback stopped. Leave and reopen the player to retry.', { persist: true });
@@ -882,6 +891,7 @@
       document.getElementById('soundSection').hidden = selection.mode !== 'canvas';
       const PlayerClass = selection.mode === 'standard' ? StandardPlayer : Player;
       let lastCanvasStats = null;
+      let playbackErrorText = '';
       let canvasHealthInFlight = false;
       // Server logs only show when a segment left this server, not how long the
       // car took to receive it, so measure segment downloads here.
@@ -923,6 +933,7 @@
         canvasHealthInFlight = true;
         const heapBytes = performance.memory?.usedJSHeapSize;
         const body = { playbackId, live: isLive, quality: currentQuality, ...lastCanvasStats, ...segmentNetwork };
+        if (playbackErrorText && lastCanvasStats.state === 'error') body.error = playbackErrorText;
         segmentNetwork.segmentSlowestMs = 0;
         segmentNetwork.segmentWaitSlowestMs = 0;
         if (Number.isFinite(heapBytes)) body.heapBytes = heapBytes;
@@ -966,6 +977,7 @@
         onStateChange: (state, detail) => {
           log(`state: ${state}${detail.error ? ' — playback error' : ''}`);
           if (detail.error) {
+            playbackErrorText = `${detail.error.name}: ${detail.error.message}`.slice(0, 160);
             console.warn('[playback]', isLive ? 'live' : 'Plex', selection.mode,
               detail.error.name, detail.error.message);
           }

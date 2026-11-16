@@ -64,13 +64,13 @@ test('a recovery long ago does not stop a new stall from retrying', () => {
 });
 
 // The error handler from canvas2.html, with the page's helpers replaced.
-function errorRecovery({ directAttempt = false, recentlyRecovered = false } = {}) {
+function errorRecovery({ directAttempt = false, recentlyRecovered = false, position = 100, duration = 1200, nextEpisode = null } = {}) {
   const html = readFileSync(new URL('../public/canvas2.html', import.meta.url), 'utf8');
   const start = html.indexOf('      // Set once the page starts navigating away');
   const end = html.indexOf('      const READ_AHEAD_SECONDS', start);
   assert.ok(start > 0 && end > start);
   const listeners = {};
-  const calls = { reloads: [], banners: [], proxy: 0 };
+  const calls = { reloads: [], banners: [], proxy: 0, countdowns: 0, hidden: 0 };
   const context = {
     window: { addEventListener: (name, fn) => { listeners[name] = fn; } },
     directAttempt, currentQuality: 'high',
@@ -78,6 +78,10 @@ function errorRecovery({ directAttempt = false, recentlyRecovered = false } = {}
     fallbackToProxy: () => { calls.proxy += 1; },
     reloadPlayback: (...args) => calls.reloads.push(args),
     showBanner: message => calls.banners.push(message),
+    hideBanner: () => { calls.hidden += 1; },
+    startNextCountdown: () => { calls.countdowns += 1; },
+    player: { duration, clock: { currentTime: position } },
+    nextEpisode,
   };
   vm.runInNewContext(`${html.slice(start, end)}; globalThis.recover = recoverFromError;`, context);
   return { recover: context.recover, calls, leave: () => listeners.beforeunload() };
@@ -110,4 +114,25 @@ test('an error while leaving the page never pulls the viewer back into the playe
   recover();
   assert.equal(calls.reloads.length, 0);
   assert.equal(calls.banners.length, 0);
+});
+
+test('an error in the last stretch of an episode moves on instead of reloading', () => {
+  const near = errorRecovery({ position: 1190, duration: 1219, nextEpisode: { ratingKey: '2' } });
+  near.recover();
+  assert.equal(near.calls.countdowns, 1);
+  assert.equal(near.calls.reloads.length, 0);
+  assert.equal(near.calls.banners.length, 0);
+  assert.equal(near.calls.hidden, 1);
+});
+
+test('a mid-episode error, or one with no next episode, still recovers as before', () => {
+  const middle = errorRecovery({ position: 600, duration: 1219, nextEpisode: { ratingKey: '2' } });
+  middle.recover();
+  assert.equal(middle.calls.countdowns, 0);
+  assert.equal(middle.calls.reloads.length, 1);
+
+  const last = errorRecovery({ position: 1210, duration: 1219, nextEpisode: null });
+  last.recover();
+  assert.equal(last.calls.countdowns, 0);
+  assert.equal(last.calls.reloads.length, 1);
 });

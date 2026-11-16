@@ -55,6 +55,9 @@ export async function resolvePlexUrl({ token, clientId, productName, preferredUr
   if (preferredUrl && (await respondsAsPlex(preferredUrl, token, null, timeoutMs))) {
     return preferredUrl;
   }
+  if (preferredUrl) {
+    console.warn('PLEX_URL did not answer as a Plex server, so the server is being looked up through plex.tv instead. If you own more than one Plex server, that may not be the one you want: fix PLEX_URL or the server it points to.');
+  }
 
   const res = await fetch(`${PLEX_TV}/api/v2/resources?includeHttps=1&includeRelay=1`, {
     headers: {
@@ -74,7 +77,11 @@ export async function resolvePlexUrl({ token, clientId, productName, preferredUr
     throw new Error(`Plex resources lookup failed: ${res.status}`);
   }
   const resources = await res.json();
-  const server = resources.find((r) => r.owned && (r.provides || '').includes('server') && (!process.env.PLEX_SERVER_ID || r.clientIdentifier === process.env.PLEX_SERVER_ID));
+  const owned = resources.filter((r) => r.owned && (r.provides || '').includes('server') && (!process.env.PLEX_SERVER_ID || r.clientIdentifier === process.env.PLEX_SERVER_ID));
+  const server = owned[0];
+  if (owned.length > 1) {
+    console.warn(`This account owns ${owned.length} Plex servers. Using "${server.name || 'the first one'}", the first plex.tv lists. To use a different one, set PLEX_URL to its address.`);
+  }
   if (!server) {
     if (preferredUrl) return preferredUrl;
     throw new Error('No owned Plex server found on this account');

@@ -241,3 +241,113 @@ test('volume above 1 routes through the limiter, and back to 1 bypasses it', () 
   p.setVolume(NaN);
   assert.equal(p.volume, 1);
 });
+
+function endingPlayer(duration) {
+  const p = player([]);
+  const failures = [];
+  const ring = new AudioRingBuffer({ capacityFrames: 100, channels: 1 });
+  Object.assign(p, {
+    generation: 1, destroyed: false, isLive: false, duration, audioRing: ring, videoQueueCapacity: 6,
+    videoEnded: false, audioEnded: false, fail(error) { failures.push(error); },
+  });
+  return { p, failures };
+}
+const audioPacket = (timestamp, frames = 10) => ({
+  timestamp, sampleRate: 10, numberOfFrames: frames, numberOfChannels: 1,
+  copyTo(destination) { destination.fill(1); }, close() {},
+});
+
+test('audio that fails to read right at the end of the stream ends it instead of failing', async () => {
+  const { p, failures } = endingPlayer(20);
+  async function* audio() { yield audioPacket(17); yield audioPacket(18); yield audioPacket(19); throw new Error('cut-off final packet'); }
+  await p.produceAudio(1, 17, audio());
+  assert.equal(p.audioEnded, true);
+  assert.equal(failures.length, 0);
+});
+
+test('audio that fails to read in the middle of the stream still fails', async () => {
+  const { p, failures } = endingPlayer(1200);
+  async function* audio() { yield audioPacket(100); throw new Error('bad packet'); }
+  await p.produceAudio(1, 100, audio());
+  assert.equal(p.audioEnded, false);
+  assert.equal(failures.length, 1);
+});
+
+test('video that fails to read right at the end of the stream ends it instead of failing', async () => {
+  const { p, failures } = endingPlayer(20);
+  const frames = [frame(18), frame(19), { ...frame(19.5), duration: 0.5 }];
+  let at = 0;
+  await p.produceVideo(1, { async next() { if (at < frames.length) return { value: frames[at++], done: false }; throw new Error('cut-off final frame'); } });
+  assert.equal(p.videoEnded, true);
+  assert.equal(failures.length, 0);
+});
+
+test('a live stream never treats a read failure as the end', async () => {
+  const { p, failures } = endingPlayer(Infinity);
+  p.isLive = true;
+  async function* audio() { yield audioPacket(5); throw new Error('dropped'); }
+  await p.produceAudio(1, 5, audio());
+  assert.equal(failures.length, 1);
+});
+
+test('nothing decoded yet means a read failure is a real failure', async () => {
+  const { p, failures } = endingPlayer(3);
+  async function* audio() { throw new Error('unreadable'); }
+  await p.produceAudio(1, 0, audio());
+  assert.equal(failures.length, 1);
+});
+
+function playedOutPlayer(overrides = {}) {
+  const states = [];
+  const p = player([]);
+  Object.assign(p, {
+    isLive: false, seeking: false, state: 'playing', wantsPlayback: true,
+    videoEnded: true, audioEnded: true, audioRing: { availableFrames: 0, setRunning() {} },
+    clock: { stop() { states.push('clock-stopped'); } },
+    setState(state) { this.state = state; states.push(state); },
+    ...overrides,
+  });
+  return { p, states };
+}
+
+test('playback ends once both tracks are read out and everything has been shown and heard', () => {
+  const { p, states } = playedOutPlayer();
+  p.finishIfPlayedOut();
+  assert.equal(p.state, 'ended');
+  assert.equal(p.wantsPlayback, false);
+  assert.deepEqual(states, ['clock-stopped', 'ended']);
+});
+
+test('playback does not end while frames or audio are still waiting, or a track is still being read', () => {
+  for (const overrides of [
+    { videoQueue: [frame(1)] },
+    { audioRing: { availableFrames: 10, setRunning() {} } },
+    { videoEnded: false },
+    { audioEnded: false },
+    { seeking: true },
+    { state: 'buffering' },
+    { isLive: true },
+  ]) {
+    const { p } = playedOutPlayer(overrides);
+    p.finishIfPlayedOut();
+    assert.notEqual(p.state, 'ended', JSON.stringify(Object.keys(overrides)));
+  }
+});
+
+test('a video with no sound ends when its picture has played out', () => {
+  const { p } = playedOutPlayer({ audioRing: null });
+  p.finishIfPlayedOut();
+  assert.equal(p.state, 'ended');
+});
+
+test('pressing play after the end starts again from the beginning', async () => {
+  const p = player([]);
+  const seeks = [];
+  Object.assign(p, {
+    state: 'ended', wantsPlayback: false, resumeAudioContext: async () => true,
+    seek: async seconds => { seeks.push(seconds); }, updatePlaybackBarrier() { seeks.push('barrier'); },
+  });
+  await p.play();
+  assert.equal(p.wantsPlayback, true);
+  assert.deepEqual(seeks, [0]);
+});

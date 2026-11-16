@@ -1,8 +1,24 @@
 services:
+  caddy:
+    image: caddy:2.11
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      APP_ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN to your HTTPS address}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      private:
+        ipv4_address: 172.30.241.2
+
   freestuffcrazy-player:
     build: .
-    ports:
-      - "127.0.0.1:${PORT:-3000}:3000"
+    restart: unless-stopped
     env_file:
       - .env
     environment:
@@ -10,8 +26,8 @@ services:
       HOST: 0.0.0.0
       PORT: 3000
       DATA_DIR: /app/data
-      APP_ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN to your public HTTPS origin}
-      TRUST_PROXY: ${TRUST_PROXY:?Set TRUST_PROXY to your reverse proxy IP or CIDR}
+      APP_ORIGIN: ${APP_ORIGIN:?Set APP_ORIGIN to your HTTPS address}
+      TRUST_PROXY: 172.30.241.2
     volumes:
       - freestuffcrazy-player-data:/app/data
       - ./config.json:/app/config.json:ro
@@ -19,6 +35,17 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    networks:
+      private:
+        ipv4_address: 172.30.241.3
+
+networks:
+  private:
+    ipam:
+      config:
+        - subnet: 172.30.241.0/24
 
 volumes:
+  caddy-data:
+  caddy-config:
   freestuffcrazy-player-data:

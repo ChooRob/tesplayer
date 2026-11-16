@@ -127,5 +127,15 @@
   "next-episode.js",
   "test/next-episode.test.js",
   "public/engine/next-countdown.js",
-  "test/next-countdown.test.js"
+  "test/next-countdown.test.js",
+  "plex-owner-link.js",
+  "test/plex-owner-link.test.js",
+  "test/plex-link-routes.test.js",
+  "test/plex-multitenant-link.test.js",
+  "test/access-log.test.js",
+  "test/production-logging.test.js",
+  "test/stats-hooks.test.js",
+  "Caddyfile",
+  "Caddyfile.public-ip",
+  "PLUGIN_DEVELOPMENT.md"
 ]

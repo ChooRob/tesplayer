@@ -2,6 +2,13 @@ import test, { after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolvePlexUrl } from '../plex-connection.js';
 
+function captureWarnings(run) {
+  const warnings = [];
+  const original = console.warn;
+  console.warn = message => warnings.push(String(message));
+  return run().then(result => ({ result, warnings }), error => { throw error; }).finally(() => { console.warn = original; });
+}
+
 const originalFetch = globalThis.fetch;
 // Probe timeouts don't hold the process open; a running server always does.
 const keepAlive = setInterval(() => {}, 50);
@@ -57,4 +64,45 @@ test('a dead address listed first holds nothing up, and the losers are cancelled
 test('PLEX_URL still comes first when it answers', async () => {
   fakePlex([remote, relay], { 'https://configured.example': 50, 'https://remote.example': 1 });
   assert.equal(await resolvePlexUrl({ ...options, preferredUrl: 'https://configured.example' }), 'https://configured.example');
+});
+
+test('owning more than one Plex server warns which one was used and how to choose', async () => {
+  globalThis.fetch = async (value, options = {}) => {
+    const url = new URL(value);
+    if (url.hostname === 'plex.tv') {
+      return Response.json([
+        { provides: 'server', owned: true, name: 'Server One', clientIdentifier: 'a', connections: [{ uri: 'https://one.example', relay: false }] },
+        { provides: 'server', owned: true, name: 'Server Two', clientIdentifier: 'b', connections: [{ uri: 'https://two.example', relay: false }] },
+        { provides: 'server', owned: false, name: 'Shared Server', clientIdentifier: 'c', connections: [] },
+      ]);
+    }
+    return Response.json({ MediaContainer: { machineIdentifier: url.hostname.startsWith('one') ? 'a' : 'b' } });
+  };
+  const { result, warnings } = await captureWarnings(() => resolvePlexUrl(options));
+  assert.equal(result, 'https://one.example');
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /owns 2 Plex servers/);
+  assert.match(warnings[0], /"Server One"/);
+  assert.match(warnings[0], /set PLEX_URL/);
+  assert.ok(!warnings[0].includes('Server Two'), 'only the name of the chosen server is logged');
+});
+
+test('a single owned server, and a PLEX_URL that answers, stay quiet', async () => {
+  fakePlex([lan], { 'https://lan.example': 5 });
+  const single = await captureWarnings(() => resolvePlexUrl(options));
+  assert.equal(single.warnings.length, 0);
+
+  fakePlex([lan], { 'https://preferred.example': 5 });
+  const preferred = await captureWarnings(() => resolvePlexUrl({ ...options, preferredUrl: 'https://preferred.example' }));
+  assert.equal(preferred.result, 'https://preferred.example');
+  assert.equal(preferred.warnings.length, 0);
+});
+
+test('a PLEX_URL that does not answer warns before falling back to plex.tv', async () => {
+  fakePlex([lan], { 'https://lan.example': 5 });
+  const { result, warnings } = await captureWarnings(() => resolvePlexUrl({ ...options, preferredUrl: 'https://dead.example' }));
+  assert.equal(result, 'https://lan.example');
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /PLEX_URL did not answer/);
+  assert.match(warnings[0], /more than one Plex server/);
 });

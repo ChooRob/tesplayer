@@ -6,6 +6,7 @@ node_modules
 
 .installation.json
 .server.pid
+.playback-active
 data/
 *.tmp
 

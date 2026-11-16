@@ -1,32 +1,34 @@
 # Frequently asked questions
 
-Answers to problems people run into. Tesla's browser and audio system change
-with vehicle software updates, so treat the Tesla entries as what has been seen
-so far, not as guarantees.
+Tesla browser and audio behavior may change with vehicle software updates. These are observed workarounds, not guarantees.
 
-## There is no sound on a Tesla, but the video plays
+## Can a passenger watch while the Tesla is moving?
 
-**Workaround:** open the **Camera** app on the touchscreen, then go back to the
-browser. The sound comes back.
+Yes, using **Canvas** playback over HTTPS. Canvas is the default in a Tesla. If video plays only while parked, open playback settings and check **Playback type** is **Canvas**. Standard playback works only while parked. The driver should not watch while driving.
 
-Notes:
+## Video is slow or keeps buffering in a Tesla
 
-- The player reports that it is playing sound normally while this happens
-  (the audio output is running and being fed), and **Restart sound** in the
-  playback settings does not fix it. Closing and reopening the browser a few
-  times has also brought the sound back. This looks like a problem in the car's
-  audio output rather than in the player, but that is not confirmed.
-- It does not happen every time. If you can note when it does (what the car was
-  doing just before, such as another app playing audio, Bluetooth or a call),
-  please add it to an issue.
-- Also check the **Volume** slider in the Adjustments panel (the tune button).
-  A boost above 100% is for quiet videos and can sound distorted or thin.
+A Tesla's cellular connection can be slow at times. It seems to get lower priority on the cellular network than a phone does, and video needs more from the connection than most things the car does, so it shows up here first.
 
-## The steering wheel button pauses, but Next and Previous do nothing
+What helps:
 
-The play/pause button on the wheel works with the player. The car's **Next** and
-**Previous** buttons stay greyed out for web pages, so the player cannot use them.
-Use the 30-second back and forward buttons in the player bar.
+- **Tether to your phone.** Connect the car to your phone's hotspot (or to a Wi-Fi network, such as your home Wi-Fi while parked) instead of relying on the car's own cellular connection. Tethering to a phone has worked better for us.
+- **Choose a lower quality.** In playback settings, **Quality** is Auto by default. Auto checks the connection when playback starts and steps down if playback struggles. If it keeps stalling, set **Medium** or **Low** yourself. The settings show what is playing now.
+- **Give it a moment after a drop.** If the connection is lost, the player shows "No connection. Waiting to reconnect…" and carries on from where you were once it is back.
+- **Check what is on the other end.** A Jellyfin server linked through the connector plugin is limited to about 2 Mbps, and a Plex server reached through Plex's own relay is limited by Plex. See the [README](README.md#try-the-hosted-player-before-you-self-host).
 
-On a Tesla the wheel button always reaches the player as "pause", so the player
-treats a press while paused as "resume".
+These are observations, not guarantees, and how well the car connects depends on where you are and your carrier.
+
+## Do I need to host the player or expose my media server?
+
+You can use the [hosted player](README.md#try-the-hosted-player-before-you-self-host) without running the player yourself. It still needs a way to reach your media server: Plex Remote Access, a public HTTPS Jellyfin address, or the Jellyfin connector plugin. The README explains each option and the hosted watch-time allowance.
+
+## The video plays in a Tesla, but there is no sound
+
+Open the car's **Camera** app, then return to the browser. This has restored sound when the player appeared to be running normally. If it persists, try reopening the browser. You can also try the **Restart sound** in playback settings.
+
+Check the **Volume** slider in the Adjustments panel (the tune button). Boosting above 100% can distort quiet videos. If the issue repeats, include what the car was doing just before it happened when reporting it.
+
+## Why don't the steering wheel Next and Previous buttons work?
+
+Tesla keeps those buttons unavailable to web pages. Use the player's 30-second back and forward controls. The wheel's play/pause button works; a press while paused resumes playback.

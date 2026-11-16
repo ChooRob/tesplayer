@@ -11,20 +11,25 @@ import { directPlexOrigin, fetchAvatar, mediaProxyPath, safeError } from './secu
 import { plexSessionId, createPlexSessionProbe, fetchPlexSegment } from './plex-session.js';
 import { createPlexLibrary } from './plex-library.js';
 import { createPlexAuth } from './plex-auth.js';
-import { plexDeviceHeaders, resolvePlexUrl } from './plex-connection.js';
+import { plexDeviceHeaders } from './plex-connection.js';
+import { createOwnerLink } from './plex-owner-link.js';
 import * as localProgress from './local-progress.js';
 import { adminConfigured, adminSpec, plexEmail } from './admin-auth.js';
 import { firstPluginWith } from './plugins.js';
 import { createPlexAccountDirectory } from './plex-account-directory.js';
 
-export async function createPlexSource({ id = 'plex', config, plugins, store, pipeUpstream, env = process.env }) {
-  const PLEX_TOKEN = env.PLEX_TOKEN;
-  if (!PLEX_TOKEN) throw new Error('Missing PLEX_TOKEN in environment');
+export async function createPlexSource({ id = 'plex', config, plugins, store, pipeUpstream, env = process.env, signedIn = null }) {
+  // Single tenant (no plugin choosing servers): only the Plex account whose
+  // confirmed email is PLEX_EMAIL may sign in; its Home profiles still can.
+  const SIGN_IN_EMAIL = firstPluginWith(plugins, 'resolveServer') ? null : plexEmail(env);
+  // PLEX_TOKEN is optional here: without it, the server's credential is saved
+  // the first time that account signs in (see plex-owner-link.js).
+  if (!env.PLEX_TOKEN && !SIGN_IN_EMAIL) throw new Error('Missing PLEX_TOKEN in environment');
   const CLIENT_ID = env.PLEX_CLIENT_ID || installationId();
   const PRODUCT_NAME = config.plex.productName;
 
-  // Default to the configured token for setup; content routes pass the profile token.
-  function plexHeaders(token = PLEX_TOKEN) {
+  // Default to the owner's token for setup; content routes pass the profile token.
+  function plexHeaders(token = owner.token) {
     return {
       'X-Plex-Client-Identifier': CLIENT_ID,
       ...plexDeviceHeaders(PRODUCT_NAME),
@@ -34,14 +39,29 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
     };
   }
 
-  // Resolve a reachable Plex URL when the configured address is missing or unavailable.
-  const PLEX_URL = await resolvePlexUrl({
-    token: PLEX_TOKEN,
-    clientId: CLIENT_ID,
-    productName: PRODUCT_NAME,
-    preferredUrl: env.PLEX_URL,
+  // The server's own credential and the Plex server it reaches. The library
+  // and played threshold are set up once that server is known.
+  const ownerLink = createOwnerLink({
+    env, clientId: CLIENT_ID, productName: PRODUCT_NAME, collection: store.collection('plex-link'),
+    onLinked: async (linked) => {
+      console.log(`Using Plex server at ${linked.url}`);
+      // Identifies this install's server by machineIdentifier, not connection URI,
+      // so the same server's data stays in one bucket regardless of which URI a
+      // session happens to resolve to.
+      localProgress.bindLegacyServer(linked.machineIdentifier, store);
+      // Use the server's played threshold; fall back to 90% if unavailable.
+      try {
+        const prefsRes = await fetch(`${linked.url}/:/prefs`, { headers: { Accept: 'application/json', 'X-Plex-Token': linked.token }, signal: AbortSignal.timeout(10000), redirect: 'error' });
+        const prefsData = await prefsRes.json();
+        const pref = (prefsData.MediaContainer.Setting || []).find((setting) => setting.id === 'LibraryVideoPlayedThreshold');
+        if (pref?.value != null) localProgress.setFinishedThreshold(Number(pref.value) / 100, linked.machineIdentifier);
+      } catch (err) {
+        console.warn(`Couldn't read LibraryVideoPlayedThreshold from Plex; using 90% default: ${safeError(err)}`);
+      }
+    },
   });
-  console.log(`Using Plex server at ${PLEX_URL}`);
+  const owner = ownerLink.owner;
+  await ownerLink.restore();
 
   // Accounts seen at sign-in, so admin pages can find them by name. Only kept
   // when the admin area is configured; nothing else reads it.
@@ -49,13 +69,9 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
     ? createPlexAccountDirectory({ collection: store.collection('plex-accounts'), secret: env.SESSION_SECRET }) : null;
 
   const plexAuth = createPlexAuth({
-    plexUrl: PLEX_URL, token: PLEX_TOKEN, clientId: CLIENT_ID, productName: PRODUCT_NAME, plugins, store, sourceId: id,
+    owner, clientId: CLIENT_ID, productName: PRODUCT_NAME, plugins, store, sourceId: id, signedIn,
     onAccount: accountDirectory && (identity => accountDirectory.remember(identity)),
   });
-
-  // Single tenant (no plugin choosing servers): only the Plex account whose
-  // confirmed email is PLEX_EMAIL may sign in; its Home profiles still can.
-  const SIGN_IN_EMAIL = firstPluginWith(plugins, 'resolveServer') ? null : plexEmail(env);
 
   // The admin is the server owner's Home profile on the account whose
   // confirmed plex.tv email is named in FREESTUFFCRAZY_ADMIN=plex:<email>, or by
@@ -70,40 +86,26 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
     return identity?.confirmedEmail === adminEmail ? { id: `plex:${identity.id}`, name: identity.username || `Plex account ${identity.id}` } : null;
   };
 
-  // Identifies this install's server by machineIdentifier, not connection URI,
-  // so the same server's data stays in one bucket regardless of which URI a
-  // session happens to resolve to.
-  const adminMachineIdentifier = await plexAuth.getMachineIdentifier();
-  localProgress.bindLegacyServer(adminMachineIdentifier, store);
-
-  // Use the server’s played threshold; fall back to 90% if unavailable.
-  try {
-    const prefsRes = await fetch(`${PLEX_URL}/:/prefs`, { headers: { Accept: 'application/json', 'X-Plex-Token': PLEX_TOKEN }, signal: AbortSignal.timeout(10000), redirect: 'error' });
-    const prefsData = await prefsRes.json();
-    const pref = (prefsData.MediaContainer.Setting || []).find((s) => s.id === 'LibraryVideoPlayedThreshold');
-    if (pref?.value != null) localProgress.setFinishedThreshold(Number(pref.value) / 100, adminMachineIdentifier);
-  } catch (err) {
-    console.warn(`Couldn't read LibraryVideoPlayedThreshold from Plex; using 90% default: ${safeError(err)}`);
-  }
-
   // Use the session’s profile token, with a configured-token fallback when auth is disabled.
   function tokenForRequest(req) {
     const token = req && plexAuth.getSessionPlexToken(req);
     if (req && config.auth.enabled && !token) throw new Error('Not authenticated');
-    return token || PLEX_TOKEN;
+    const usable = token || owner.token;
+    if (!usable) throw new Error('Plex is not linked yet');
+    return usable;
   }
 
   // Mirrors tokenForRequest -- which Plex server this request's token is
-  // valid against, defaulting to PLEX_URL.
+  // valid against, defaulting to the owner's server.
   function urlForRequest(req) {
-    return (req && plexAuth.getSessionPlexUrl(req)) || PLEX_URL;
+    return (req && plexAuth.getSessionPlexUrl(req)) || owner.url;
   }
 
   // Create lightweight library clients per request; session probes are cached separately.
-  function libraryFor(token, plexUrl = PLEX_URL, clientId = CLIENT_ID) {
+  function libraryFor(token, plexUrl = owner.url, clientId = CLIENT_ID) {
     return createPlexLibrary({ plexUrl, token, clientId, productName: PRODUCT_NAME });
   }
-  const adminLibrary = libraryFor(PLEX_TOKEN);
+  const adminLibrary = () => libraryFor(owner.token);
 
   // A stable identifier per Home profile, not one app-wide CLIENT_ID for
   // everyone, so Plex's hub personalization resolves the right account.
@@ -120,12 +122,12 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
   // Owner-only lookups use the admin token for this install's own server;
   // any other (genuinely different) server uses the requester's own token.
   function adminLibraryFor(req, url) {
-    return plexAuth.getSessionMachineIdentifier(req) === adminMachineIdentifier ? adminLibrary : libraryFor(tokenForRequest(req), url, clientIdForRequest(req));
+    return plexAuth.getSessionMachineIdentifier(req) === owner.machineIdentifier ? adminLibrary() : libraryFor(tokenForRequest(req), url, clientIdForRequest(req));
   }
 
   // Keys local-progress.js's storage by physical server, not connection URI.
   function serverIdForRequest(req) {
-    return (req && plexAuth.getSessionMachineIdentifier(req)) || adminMachineIdentifier;
+    return (req && plexAuth.getSessionMachineIdentifier(req)) || owner.machineIdentifier;
   }
 
   // Resolves the verified Home profile to a PMS account ID, caching accounts
@@ -146,7 +148,7 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
   }
 
   const sessionProbesByToken = new Map();
-  function sessionProbeFor(token, plexUrl = PLEX_URL) {
+  function sessionProbeFor(token, plexUrl = owner.url) {
     const key = `${plexUrl}::${token}`;
     if (!sessionProbesByToken.has(key)) {
       if (sessionProbesByToken.size >= config.auth.maxSessions) sessionProbesByToken.delete(sessionProbesByToken.keys().next().value);
@@ -157,13 +159,13 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
 
   // Never expose the configured installation token to anonymous/auth-disabled clients.
   function directTokenForRequest(req) {
-    return directPlexOrigin(plexAuth.getSessionPlexUrl(req) || PLEX_URL)
+    return directPlexOrigin(plexAuth.getSessionPlexUrl(req) || owner.url)
       ? plexAuth.getSessionPlexToken(req) || '' : '';
   }
 
   // ---- Playback -----------------------------------------------------------
 
-  async function stopTranscode({ sessionId, token, plexUrl = PLEX_URL }) {
+  async function stopTranscode({ sessionId, token, plexUrl = owner.url }) {
     if (!sessionId) return;
     const params = new URLSearchParams({ session: sessionId });
     try {
@@ -297,7 +299,7 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
   // Records episode completions locally to supplement Plex history for next-up.
   // plexUrl looks the item up; serverId is the stable machineIdentifier
   // local-progress.js stores against -- the two can legitimately differ.
-  async function recordFinishedEpisodeIfApplicable(accountId, ratingKey, token, plexUrl = PLEX_URL, serverId = adminMachineIdentifier) {
+  async function recordFinishedEpisodeIfApplicable(accountId, ratingKey, token, plexUrl = owner.url, serverId = owner.machineIdentifier) {
     try {
       const details = await libraryFor(token, plexUrl).itemDetails(ratingKey);
       if (details.type !== 'episode') return;
@@ -420,6 +422,18 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
           if (SIGN_IN_EMAIL && (await plexAuth.identityForToken(accountToken))?.confirmedEmail !== SIGN_IN_EMAIL) {
             // Deliberately vague: nothing about which account, or how it is chosen.
             return res.json({ authenticated: false, pending: false, error: 'This Plex account can\'t sign in to this server.' });
+          }
+          // The first time the owner signs in with no PLEX_TOKEN set, this finds
+          // and saves the server; later sign-ins keep the saved token current.
+          if (!owner.url) {
+            try { await ownerLink.connect(accountToken, { remember: true }); }
+            catch (err) {
+              // Server log only; the viewer gets the generic message below.
+              console.warn(`Could not link the Plex server after sign-in: ${err?.message ?? err}${err?.cause?.code ? ` (${err.cause.code})` : ''}`);
+              return res.json({ authenticated: false, pending: false, error: 'Signed in, but no Plex server owned by this account could be reached. Check that the server is online, then try again.' });
+            }
+          } else {
+            await ownerLink.refresh(accountToken).catch(() => console.warn('Could not save the refreshed Plex sign-in'));
           }
 
           const users = await plexAuth.listHomeUsers(accountToken);
@@ -587,7 +601,7 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
       proxy: proxyMedia,
       stop: stopTranscode,
       // Whether the browser could fetch media straight from this server.
-      directCapable: req => !!directPlexOrigin(plexAuth.getSessionPlexUrl(req) || PLEX_URL),
+      directCapable: req => !!directPlexOrigin(plexAuth.getSessionPlexUrl(req) || owner.url),
       // The media origin the player page may load from directly, if any.
       mediaOrigin: req => directTokenForRequest(req) ? urlForRequest(req) : '',
     },

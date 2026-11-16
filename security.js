@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { readdirSync, readFileSync, createWriteStream } from 'node:fs';
+import { readdirSync, readFileSync, createWriteStream, statSync, renameSync } from 'node:fs';
 import path from 'node:path';
 
 export function parseCookies(header = '') {
@@ -58,21 +58,60 @@ export function rateLimit({ maximum, windowMs = 60000, now = Date.now, maxKeys =
 // scans for nonexistent paths, etc). Deliberately logs method/path/status/UA
 // only -- never query strings, cookies or auth headers, so an
 // accidentally-shared log can't leak a session or a Plex token.
-export function accessLog(logPath) {
-  const stream = createWriteStream(logPath, { flags: 'a' });
-  stream.on('error', (err) => console.error('Access log write failed:', err.message));
-  return (req, res, next) => {
+const ACCESS_LOG_MAX_BYTES = 5 * 1024 * 1024;
+const LOGGED_PAGES = new Set(['/', '/login', '/browse', '/canvas2', '/canvas', '/detail', '/admin', '/link']);
+// Background posts a player sends every few seconds while it plays.
+const HEARTBEAT_POSTS = /^\/(api\/)?(playback\/(usage|canvas-health)|(plex\/|library\/)?progress)$/;
+
+// In production the log answers who came and what failed, not every thumbnail,
+// heartbeat and media segment: errors, page loads, playback starts and
+// everything a viewer did on purpose. Outside production everything is kept.
+export function worthLogging({ method, path, status }) {
+  if (status >= 400) return true;
+  if (method === 'GET' || method === 'HEAD') return LOGGED_PAGES.has(path) || path === '/api/start';
+  return !HEARTBEAT_POSTS.test(path);
+}
+
+// A stream's session ID is only a path segment, but there is no reason to keep it.
+const maskSession = path => path.replace(/\/session\/[^/]+\//, '/session/-/');
+
+// The file never grows past about twice maxBytes: when it is full it becomes
+// access.1.log (replacing the one before) and a new one starts.
+export function accessLog(logPath, { production = process.env.NODE_ENV === 'production', maxBytes = ACCESS_LOG_MAX_BYTES } = {}) {
+  const rotatedPath = logPath.replace(/\.log$/, '.1.log');
+  let size = 0;
+  try { size = statSync(logPath).size; } catch { /* a new file */ }
+  const open = () => {
+    const next = createWriteStream(logPath, { flags: 'a' });
+    next.on('error', (err) => console.error('Access log write failed:', err.message));
+    return next;
+  };
+  let stream = open();
+  function rotate() {
+    stream.end();
+    try { renameSync(logPath, rotatedPath); } catch (err) { if (err.code !== 'ENOENT') console.error('Access log rotation failed:', err.message); }
+    stream = open();
+    size = 0;
+  }
+  const middleware = (req, res, next) => {
     const start = Date.now();
     res.on('finish', () => {
+      // The full path (a router sees only its own part of it).
+      const urlPath = maskSession((req.originalUrl || req.url || '').split('?')[0]);
+      if (production && !worthLogging({ method: req.method, path: urlPath, status: res.statusCode })) return;
       const ua = (req.get('user-agent') || '-').replace(/[\r\n]/g, ' ');
       // Only the quality tier name from the query string -- never the full
       // query, which can carry item keys and other request details.
-      const quality = req.path === '/api/start' ? (req.query.quality || 'high') : '-';
-      const line = `${new Date().toISOString()} ${req.ip} ${req.method} ${req.path} ${res.statusCode} ${Date.now() - start}ms quality=${quality} "${ua}"\n`;
+      const quality = urlPath === '/api/start' ? (req.query?.quality || 'high') : '-';
+      const line = `${new Date().toISOString()} ${req.ip} ${req.method} ${urlPath} ${res.statusCode} ${Date.now() - start}ms quality=${quality} "${ua}"\n`;
+      if (size >= maxBytes) rotate();
       stream.write(line);
+      size += Buffer.byteLength(line);
     });
     next();
   };
+  middleware.close = () => new Promise(resolve => stream.end(resolve));
+  return middleware;
 }
 
 function scriptHashes(html) {

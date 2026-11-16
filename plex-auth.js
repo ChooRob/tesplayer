@@ -57,7 +57,10 @@ function parseXmlTags(xml, tagName) {
   return results;
 }
 
-export function createPlexAuth({ plexUrl, token, clientId, productName, plugins = [], store, sourceId = 'plex', onAccount = null }) {
+// `owner` is the server's own Plex credential (see plex-owner-link.js). Its url,
+// token and machineIdentifier are read when needed, because with no PLEX_TOKEN
+// they only exist once the owner has signed in.
+export function createPlexAuth({ owner, clientId, productName, plugins = [], store, sourceId = 'plex', onAccount = null, signedIn = null }) {
   // "Sign out everywhere" bumps an account's number here; cookies carrying an
   // older number are rejected. Only Plex account IDs and counters, no secrets.
   const signoutGenerations = store.collection('signout-generations'); // accountId -> number
@@ -80,24 +83,10 @@ export function createPlexAuth({ plexUrl, token, clientId, productName, plugins 
   }
 
   // This server's own identity on plex.tv -- what we compare the signed-in
-  // user's accessible-resources list against. Cheap and stable; fetch once.
-  let machineIdPromise = null;
-  function getMachineIdentifier() {
-    if (!machineIdPromise) {
-      machineIdPromise = fetch(`${plexUrl}/identity`, {
-        headers: { Accept: 'application/json', 'X-Plex-Token': token },
-        redirect: 'error',
-      signal: AbortSignal.timeout(10000),
-      })
-        .then(async (res) => {
-          if (!res.ok) throw new Error('Unable to verify Plex identity');
-          const id = (await res.json())?.MediaContainer?.machineIdentifier;
-          if (typeof id !== 'string' || !id) throw new Error('Invalid Plex identity');
-          return id;
-        })
-        .catch(error => { machineIdPromise = null; throw error; });
-    }
-    return machineIdPromise;
+  // user's accessible-resources list against.
+  async function getMachineIdentifier() {
+    if (!owner.machineIdentifier) throw new Error('Plex is not linked yet');
+    return owner.machineIdentifier;
   }
 
   const cookieOptions = (res) => ({ httpOnly: true, sameSite: 'lax', secure: config.auth.secureCookies || !!res.req?.secure, path: '/' });
@@ -260,10 +249,10 @@ export function createPlexAuth({ plexUrl, token, clientId, productName, plugins 
   async function defaultResolveServer(userToken) {
     const resource = await findServerResource(userToken);
     if (resource) {
-      return { ok: true, plexUrl, machineIdentifier: await getMachineIdentifier(), accessToken: resource.accessToken || userToken };
+      return { ok: true, plexUrl: owner.url, machineIdentifier: await getMachineIdentifier(), accessToken: resource.accessToken || userToken };
     }
     if (!config.auth.requireServerAccess) {
-      return { ok: true, plexUrl, machineIdentifier: await getMachineIdentifier(), accessToken: userToken };
+      return { ok: true, plexUrl: owner.url, machineIdentifier: await getMachineIdentifier(), accessToken: userToken };
     }
     return { ok: false, error: 'This Plex account does not have access to this server' };
   }
@@ -285,7 +274,8 @@ export function createPlexAuth({ plexUrl, token, clientId, productName, plugins 
 
   // Keep the account token for Home switching and the active profile token
   // for media access -- both only inside the encrypted cookie.
-  async function setSession(res, { accountToken, userToken, title, thumb, profileId, admin, plexUrl: sessionPlexUrl, machineIdentifier: sessionMachineIdentifier }) {
+  // `signIn` is false when an already signed-in viewer only switches profile.
+  async function setSession(res, { accountToken, userToken, title, thumb, profileId, admin, plexUrl: sessionPlexUrl, machineIdentifier: sessionMachineIdentifier, signIn = true }) {
     // The account ID ties the cookie to "sign out everywhere". If plex.tv
     // can't confirm it right now the session still works, but only expiry ends it.
     const accountId = (await identityForToken(accountToken).catch(() => null))?.id ?? null;
@@ -299,7 +289,7 @@ export function createPlexAuth({ plexUrl, token, clientId, productName, plugins 
       thumb: thumb || null,
       profileId: profileId != null ? String(profileId) : null,
       admin: !!admin,
-      plexUrl: sessionPlexUrl || plexUrl, // which Plex server userToken is valid against
+      plexUrl: sessionPlexUrl || owner.url, // which Plex server userToken is valid against
       // Identifies that same server independent of which connection URI
       // was used to reach it -- a resolveServer plugin can legitimately
       // pick a different (but equally valid) URI per login than the one
@@ -309,6 +299,7 @@ export function createPlexAuth({ plexUrl, token, clientId, productName, plugins 
       machineIdentifier: sessionMachineIdentifier || null,
       iat: Date.now(),
     } });
+    if (signIn && accountId) signedIn?.({ sourceType: 'plex', userKey: `plex:${accountId}` });
   }
 
   // Opened once per request by the loadSession middleware (it needs an async
@@ -316,6 +307,9 @@ export function createPlexAuth({ plexUrl, token, clientId, productName, plugins 
   // The session object is this source's credential plus the cookie's sid.
   const openedSessions = new WeakMap();
   async function loadSession(req, _res, next) {
+    // Until the owner has linked the server there is nothing a session could
+    // reach, so everyone is signed out and the login page does the linking.
+    if (!owner.url) { openedSessions.set(req, null); return next(); }
     try {
       const opened = unpackSession(sealer.open('session', parseCookies(req.headers.cookie)[COOKIE_NAME]),
         { legacySourceId: sourceId, legacyType: 'plex' });
@@ -375,7 +369,7 @@ export function createPlexAuth({ plexUrl, token, clientId, productName, plugins 
 
   function getSessionPlexUrl(req) {
     const session = getSession(req);
-    return session?.plexUrl || plexUrl;
+    return session?.plexUrl || owner.url;
   }
 
   function getSessionMachineIdentifier(req) {
@@ -440,7 +434,7 @@ export function createPlexAuth({ plexUrl, token, clientId, productName, plugins 
     // in server.js and findServerResource above.
     await setSession(res, { accountToken: session.accountToken, userToken: resolved.accessToken || switchedToken,
       title: picked.title, thumb: picked.thumb, profileId: picked.id, admin: picked.admin,
-      plexUrl: resolved.plexUrl, machineIdentifier: resolved.machineIdentifier });
+      plexUrl: resolved.plexUrl, machineIdentifier: resolved.machineIdentifier, signIn: false });
   }
 
   async function getVerifiedProfile(req) {
