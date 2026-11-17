@@ -70,6 +70,88 @@ function serverSection(server) {
   return section;
 }
 
+// A Plex account with more than one server (its own, or shared with it) can move
+// between them here, without signing in again. The choice is also remembered for the
+// next sign-in on this device if the person asked for that when they signed in.
+const SERVER_CHOICE_KEY = 'freeStuffCrazyPlayer.plexServer';
+function plexServerSection(server) {
+  const section = document.createElement('div');
+  section.style.cssText = 'margin: 24px auto 0; max-width: 420px; text-align: left; background: #222; border: 1px solid #333; border-radius: 10px; padding: 14px 16px;';
+  const label = document.createElement('div');
+  label.textContent = 'Server';
+  label.style.cssText = 'color: #999; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px;';
+  const name = document.createElement('div');
+  name.textContent = server.name;
+  name.style.cssText = 'font-size: 17px; font-weight: 600; color: #fff; word-break: break-word;';
+  const switchButton = document.createElement('button');
+  switchButton.type = 'button';
+  switchButton.textContent = 'Switch server';
+  switchButton.style.cssText = 'margin-top: 12px; min-height: 44px; padding: 0 16px; border-radius: 6px; border: 1px solid #666; background: #2a2a2a; color: #eee; font: inherit; font-size: 14px; cursor: pointer;';
+  const list = document.createElement('div');
+  list.style.cssText = 'display: grid; gap: 8px; margin-top: 12px;';
+  const message = document.createElement('div');
+  message.setAttribute('aria-live', 'polite');
+  message.style.cssText = 'color: #999; font-size: 13px; min-height: 16px; margin-top: 8px;';
+  const fail = (text) => { message.textContent = text; message.style.color = '#ff6b6b'; };
+  section.append(label, name, switchButton, list, message);
+
+  async function choose(chosen) {
+    message.textContent = `Switching to ${chosen.name}…`;
+    message.style.color = '#999';
+    try {
+      const res = await fetch('/api/auth/plex/switch-server', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serverId: chosen.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Switch failed');
+      try { if (localStorage.getItem(SERVER_CHOICE_KEY)) localStorage.setItem(SERVER_CHOICE_KEY, chosen.id); } catch { /* not remembered */ }
+      // The new server has its own libraries and items, so start at its front page.
+      location.href = '/browse';
+    } catch (err) {
+      fail(err.message);
+    }
+  }
+
+  switchButton.addEventListener('click', async () => {
+    switchButton.disabled = true;
+    list.replaceChildren();
+    message.textContent = 'Checking your servers…';
+    message.style.color = '#999';
+    try {
+      const res = await fetch('/api/auth/plex/servers', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !Array.isArray(data.servers)) throw new Error(data.error || 'Could not list your servers');
+      message.textContent = '';
+      for (const entry of data.servers) {
+        const current = entry.id === data.current;
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.disabled = current || !entry.online;
+        row.style.cssText = 'display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; text-align: left; min-height: 48px; padding: 8px 12px; border-radius: 8px; border: 1px solid #444; background: #1c1c1c; color: #eee; font: inherit; cursor: pointer;' + (row.disabled ? 'opacity: .6; cursor: default;' : '');
+        const rowName = document.createElement('span');
+        rowName.textContent = entry.name;
+        rowName.style.cssText = 'font-weight: 600; word-break: break-word;';
+        const who = document.createElement('span');
+        who.textContent = entry.owned ? 'Yours' : entry.sharedBy ? `Shared by ${entry.sharedBy}` : 'Shared with you';
+        who.style.cssText = 'font-size: 12px; color: #999;';
+        const state = document.createElement('span');
+        state.textContent = current ? 'Current' : !entry.online ? 'Offline' : entry.relayOnly ? 'Online (slow)' : 'Online';
+        state.style.cssText = `grid-row: 1 / span 2; grid-column: 2; font-size: 12px; color: ${!entry.online ? '#ff9a9a' : entry.relayOnly ? '#f2c94c' : '#6fcf97'};`;
+        row.append(rowName, who, state);
+        row.addEventListener('click', () => choose(entry));
+        list.append(row);
+      }
+    } catch (err) {
+      fail(err.message);
+    } finally {
+      switchButton.disabled = false;
+    }
+  });
+  return section;
+}
+
 function openSwitchUserOverlay({ adminAvailable, profiles = true, title: userTitle, source, server }) {
   const overlay = document.createElement('div');
   overlay.style.cssText = `
@@ -113,6 +195,8 @@ function openSwitchUserOverlay({ adminAvailable, profiles = true, title: userTit
   // No profile grid for backends without switchable profiles.
   grid.style.cssText = profiles ? 'display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 20px;' : 'display: none;';
   card.appendChild(grid);
+  // Plex only: a Jellyfin session shows its own server section above.
+  if (profiles && server?.switchable) card.appendChild(plexServerSection(server));
 
   const status = document.createElement('div');
   status.style.cssText = 'margin-top: 18px; font-size: 13px; color: #999; min-height: 18px;';

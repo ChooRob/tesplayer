@@ -34,6 +34,8 @@
     #jellyfinStep p { margin: 12px 0; }
     .jellyfinForm { display: grid; gap: 12px; text-align: left; }
     .jellyfinForm label { display: grid; gap: 6px; font-size: 13px; color: #bbb; }
+    .jellyfinForm .help { margin: 0; font-size: 13px; color: #bbb; }
+    .jellyfinForm .help a { color: #6db3ff; }
     .jellyfinForm input {
       background: #1c1c1c; color: #eee; border: 1px solid #444; border-radius: 6px;
       padding: 12px; font-size: 16px; min-height: 44px;
@@ -74,6 +76,21 @@
       padding: 10px 16px; font-size: 14px; font-weight: 700; cursor: pointer; margin-left: 8px;
     }
 
+    #serverPicker { display: none; }
+    #serverList { display: grid; gap: 10px; margin-top: 8px; text-align: left; }
+    .serverRow {
+      display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; width: 100%;
+      background: #1c1c1c; color: #eee; border: 1px solid #444; border-radius: 10px;
+      padding: 12px 14px; font-family: inherit; cursor: pointer; text-align: left;
+    }
+    .serverRow:hover:not(:disabled), .serverRow:focus-visible { border-color: #e5a00d; outline: none; }
+    .serverRow:disabled { opacity: 0.5; cursor: default; }
+    .serverRow .name { font-size: 16px; font-weight: 600; word-break: break-word; }
+    .serverRow .who { grid-column: 1; font-size: 12px; color: #999; }
+    .serverRow .state { grid-row: 1 / span 2; grid-column: 2; font-size: 12px; color: #6fcf97; white-space: nowrap; }
+    .serverRow .state.offline { color: #ff9a9a; }
+    .serverRow .state.slow { color: #f2c94c; }
+    #rememberServer { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 18px 0 0; font-size: 13px; color: #bbb; cursor: pointer; }
     #linkStep { display: none; }
     #linkStep p { margin: 12px 0; }
     #linkQr { width: min(222px, 60vw); height: auto; image-rendering: pixelated; }
@@ -108,6 +125,7 @@
         <p id="jellyfinServerHint">Enter your Jellyfin server's https:// address, or leave it empty to use this site's own Jellyfin server.</p>
         <label><span id="jellyfinServerLabel">Server address</span><input id="jellyfinServer" name="server" type="text" inputmode="url" autocomplete="url" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="https://jellyfin.example.com"></label>
         <button type="submit" class="signIn jellyfin">Continue</button>
+        <p id="jellyfinServerHelp" class="help" hidden></p>
       </form>
       <div id="jellyfinCodeStep" hidden>
         <p>In any Jellyfin app signed in to <strong id="jellyfinServerName">this server</strong>, open <strong>Settings › Quick Connect</strong> and enter this code.</p>
@@ -141,6 +159,12 @@
       </form>
       <button type="button" class="textButton plexBack">Back</button>
     </div>
+    <div id="serverPicker">
+      <p>Choose a server</p>
+      <div id="serverList"></div>
+      <label id="rememberServer"><input type="checkbox" id="rememberServerBox" checked> Remember on this device</label>
+      <button type="button" class="textButton plexBack">Back</button>
+    </div>
     <div id="status"></div>
   </div>
 
@@ -168,6 +192,8 @@
     const linkCode = document.getElementById('linkCode');
     const userPicker = document.getElementById('userPicker');
     const userGrid = document.getElementById('userGrid');
+    const serverPicker = document.getElementById('serverPicker');
+    const serverList = document.getElementById('serverList');
     const pinForm = document.getElementById('pinForm');
     const pinInput = document.getElementById('pinInput');
     const statusEl = document.getElementById('status');
@@ -179,10 +205,12 @@
     }
 
     function resetToSignIn() {
+      showServerHelp(false);
       stopJellyfinPolling();
       stopPolling();
       linkStep.style.display = 'none';
       userPicker.style.display = 'none';
+      serverPicker.style.display = 'none';
       document.getElementById('card').classList.remove('wide');
       jellyfinStep.hidden = true;
       signInStep.style.display = 'block';
@@ -229,6 +257,7 @@
             ? prompt.hint : `${prompt.hint} Or leave it empty to use this site's own Jellyfin server.`;
         }
         if (prompt?.label) document.getElementById('jellyfinServerLabel').textContent = prompt.label;
+        jellyfinHelp = prompt?.help ?? null;
         if (prompt?.placeholder) document.getElementById('jellyfinServer').placeholder = prompt.placeholder;
         signInBtn.hidden = !types.has('plex');
         jellyfinBtn.hidden = !types.has('jellyfin');
@@ -249,6 +278,22 @@
     const SERVER_KEY = 'freeStuffCrazyPlayer.jellyfinServer';
     let jellyfinAsksServer = false;
     let jellyfinPromptHint = null;
+    let jellyfinHelp = null; // { text, label, url }: where to go when a typed address does not work
+    const jellyfinServerHelp = document.getElementById('jellyfinServerHelp');
+    // The help the site's plugin offers (for example, a connector for servers that are
+    // not on the internet) appears only after an address fails, and only for plain https.
+    function showServerHelp(show) {
+      let url = null;
+      try { const parsed = new URL(jellyfinHelp?.url ?? ''); if (parsed.protocol === 'https:') url = parsed.href; } catch { /* no link */ }
+      jellyfinServerHelp.hidden = !(show && url);
+      if (jellyfinServerHelp.hidden || jellyfinServerHelp.firstChild) return;
+      const link = document.createElement('a');
+      link.href = url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = jellyfinHelp.label;
+      jellyfinServerHelp.append(`${jellyfinHelp.text} `, link);
+    }
     let jellyfinServerRequired = false;
     let jellyfinTimer = null;
     // A page that just set up a server (e.g. a plugin's linking page) can
@@ -282,6 +327,7 @@
 
     // address: the user's own server when this install lets users bring one.
     async function startJellyfin(address = '') {
+      showServerHelp(false);
       setStatus('Contacting Jellyfin…');
       try {
         const res = await fetch('/api/auth/jellyfin/start', {
@@ -312,6 +358,9 @@
       } catch (err) {
         jellyfinBtn.disabled = false;
         setStatus(`Failed to start sign-in: ${err.message}`, true);
+        // Any trouble with a server address (http, a private network, not reachable,
+        // not Jellyfin) points to the plugin that connects servers that are not exposed.
+        if (address) showServerHelp(true);
       }
     }
 
@@ -416,6 +465,13 @@
           showUserPicker(data.pinId, data.users);
           return;
         }
+        if (data.needsServerSelection) {
+          // An account with more than one server (its own, or shared with it).
+          stopPolling();
+          setStatus('');
+          showServerPicker(data.pinId, data.servers);
+          return;
+        }
         if (data.pending === false) {
           // Signed in to plex.tv, but not authorized for this server.
           stopPolling();
@@ -497,11 +553,74 @@
         if (data.authenticated) {
           setStatus('Signed in — loading…');
           location.href = returnTo;
+        } else if (data.needsServerSelection) {
+          setStatus('');
+          showServerPicker(data.pinId, data.servers);
         } else {
           setStatus(data.error || 'Sign-in failed', true);
         }
       } catch (err) {
         setStatus(`Sign-in failed: ${err.message}`, true);
+      }
+    }
+
+    // ---- Plex: which server, for an account with more than one ----
+    const SERVER_CHOICE_KEY = 'freeStuffCrazyPlayer.plexServer';
+    function rememberedServer() {
+      try { return localStorage.getItem(SERVER_CHOICE_KEY); } catch { return null; }
+    }
+    function rememberServer(id) {
+      try { if (id) localStorage.setItem(SERVER_CHOICE_KEY, id); else localStorage.removeItem(SERVER_CHOICE_KEY); } catch { /* not remembered */ }
+    }
+
+    function showServerPicker(pinId, servers) {
+      // A server chosen before, on this device, that answers now: no need to ask again.
+      const before = rememberedServer();
+      const known = servers.find((server) => server.id === before && server.online);
+      if (known) { selectServer(pinId, known, { remember: true, quiet: true, servers }); return; }
+
+      signInStep.style.display = 'none';
+      linkStep.style.display = 'none';
+      userPicker.style.display = 'none';
+      serverPicker.style.display = 'block';
+      serverList.replaceChildren();
+      for (const server of servers) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'serverRow';
+        row.disabled = !server.online;
+        const name = document.createElement('span');
+        name.className = 'name';
+        name.textContent = server.name;
+        const who = document.createElement('span');
+        who.className = 'who';
+        who.textContent = server.owned ? 'Yours' : server.sharedBy ? `Shared by ${server.sharedBy}` : 'Shared with you';
+        const state = document.createElement('span');
+        state.className = 'state' + (!server.online ? ' offline' : server.relayOnly ? ' slow' : '');
+        state.textContent = !server.online ? 'Offline' : server.relayOnly ? 'Online (slow)' : 'Online';
+        row.append(name, who, state);
+        row.addEventListener('click', () => selectServer(pinId, server, { remember: document.getElementById('rememberServerBox').checked, servers }));
+        serverList.append(row);
+      }
+    }
+
+    async function selectServer(pinId, server, { remember, quiet = false, servers }) {
+      setStatus(`Signing in to ${server.name}…`);
+      try {
+        const res = await fetch('/api/auth/plex/select-server', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pinId, serverId: server.id }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!data.authenticated) throw new Error(data.error || 'Sign-in failed');
+        rememberServer(remember ? server.id : null);
+        setStatus('Signed in — loading…');
+        location.href = returnTo;
+      } catch (err) {
+        setStatus(err.message, true);
+        // A remembered server that did not work: let the person choose another.
+        if (quiet) { rememberServer(null); showServerPicker(pinId, servers); }
       }
     }
 

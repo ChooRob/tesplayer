@@ -1,7 +1,7 @@
-// The server's own Plex credential: the owner's account token and the Plex
-// server it reaches. It comes from PLEX_TOKEN when that is set. Otherwise it
-// is saved the first time the PLEX_EMAIL account signs in, and reused on every
-// later start, so a new install needs no token copied by hand.
+// Which Plex server this install belongs to. The first sign-in by the PLEX_EMAIL
+// account finds the server and saves only its address and ID; no token is kept.
+// Every session carries its own account token (and only the owner's account can
+// sign in), so nothing else needs one stored.
 
 import { plexDeviceHeaders, resolvePlexUrl } from './plex-connection.js';
 import { safeError } from './security.js';
@@ -9,12 +9,11 @@ import { safeError } from './security.js';
 const RETRY_MS = 30_000;
 
 export function createOwnerLink({
-  env, collection, clientId, productName, onLinked,
+  env, collection, clientId, productName, onLinked, onOwnerToken,
   resolve = resolvePlexUrl, verifyOwner, retryMs = RETRY_MS, log = console,
 }) {
-  // Filled in by connect(); `url` stays null until the server is reachable.
-  const owner = { token: null, url: null, machineIdentifier: null };
-  const fromEnv = !!env.PLEX_TOKEN;
+  // Filled in by connect() or restore(); `url` stays null until the server is known.
+  const owner = { url: null, machineIdentifier: null };
   let retryTimer = null;
 
   async function identify(url, token) {
@@ -49,26 +48,35 @@ export function createOwnerLink({
     retryTimer = null;
   }
 
-  // Find the owner's server with this token. `remember` saves the token for the
-  // next start (used for a sign-in, not for a token that is already saved).
-  async function connect(token, { remember = false } = {}) {
+  // Find the owner's server with this token and save its address and ID (never the token).
+  async function connect(token) {
     const url = await resolve({ token, clientId, productName, preferredUrl: env.PLEX_URL });
     const machineIdentifier = await identify(url, token);
-    // A token from PLEX_TOKEN has always been trusted as given; one learned from
-    // a sign-in or read back from storage must belong to the server's owner.
-    if (!fromEnv && !(await ownsServer(token, machineIdentifier))) throw new Error('This Plex account does not own that server');
-    Object.assign(owner, { token, url, machineIdentifier });
-    if (remember) await collection.set('owner', { token, savedAt: Date.now() });
+    // A token learned from a sign-in or read back from storage must belong to the server's owner.
+    if (!(await ownsServer(token, machineIdentifier))) throw new Error('This Plex account does not own that server');
+    Object.assign(owner, { url, machineIdentifier });
+    await save();
     stopRetrying();
     await onLinked?.(owner);
+    await onOwnerToken?.(owner, token);
   }
 
-  // The owner signed in again: keep the saved token current. The server itself
-  // does not change, so nothing is looked up again.
+  async function save() {
+    await collection.set('owner', { url: owner.url, machineIdentifier: owner.machineIdentifier, savedAt: Date.now() });
+  }
+
+  // The owner signed in again. Their token is not kept, but it can show where the
+  // server is now: if its address changed, remember the new one.
   async function refresh(token) {
-    if (fromEnv || !owner.url || token === owner.token) return;
-    owner.token = token;
-    await collection.set('owner', { token, savedAt: Date.now() });
+    if (!owner.url) return;
+    try {
+      const url = await resolve({ token, clientId, productName, preferredUrl: env.PLEX_URL });
+      if (url !== owner.url && await identify(url, token) === owner.machineIdentifier) {
+        owner.url = url;
+        await save();
+      }
+    } catch { /* the server may be down; the saved address stays */ }
+    await onOwnerToken?.(owner, token);
   }
 
   function retryLater(token) {
@@ -77,23 +85,28 @@ export function createOwnerLink({
     retryTimer.unref?.();
   }
 
-  // At startup. A PLEX_TOKEN that cannot reach Plex stops the server, as it
-  // always has. A saved token that cannot is retried in the background: the
-  // server may simply be down, and the owner can sign in again either way.
+  // At startup. A server saved by an earlier sign-in needs no network and no token.
+  // An install that saved the owner's token before now uses it once to find the server,
+  // after which only the address and ID are kept; if Plex is unreachable it keeps
+  // trying, and the owner can also just sign in again.
   async function restore() {
-    if (fromEnv) return connect(env.PLEX_TOKEN);
     const saved = await collection.get('owner');
-    if (typeof saved?.token !== 'string' || !saved.token) {
-      log.log('Plex is not linked yet. Sign in with the PLEX_EMAIL account to finish setting it up.');
+    if (typeof saved?.token === 'string' && saved.token) {
+      try {
+        return await connect(saved.token);
+      } catch (error) {
+        log.warn(`Could not reach Plex with the saved owner sign-in (${safeError(error)}); trying again every ${Math.round(retryMs / 1000)} seconds. The owner can also sign in again.`);
+        retryLater(saved.token);
+        return undefined;
+      }
+    }
+    if (typeof saved?.url === 'string' && saved.url && typeof saved.machineIdentifier === 'string' && saved.machineIdentifier) {
+      Object.assign(owner, { url: saved.url, machineIdentifier: saved.machineIdentifier });
+      await onLinked?.(owner);
       return undefined;
     }
-    try {
-      return await connect(saved.token);
-    } catch (error) {
-      log.warn(`Could not reach Plex with the saved owner sign-in (${safeError(error)}); trying again every ${Math.round(retryMs / 1000)} seconds. The owner can also sign in again.`);
-      retryLater(saved.token);
-      return undefined;
-    }
+    log.log('Plex is not linked yet. Sign in with the PLEX_EMAIL account to finish setting it up.');
+    return undefined;
   }
 
   return { owner, connect, refresh, restore, stopRetrying };

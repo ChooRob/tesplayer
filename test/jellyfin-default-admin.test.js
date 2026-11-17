@@ -22,7 +22,7 @@ const pluginPath = path.join(temporary, 'tab-plugin.js');
 writeFileSync(pluginPath, `export default { registerRoutes(_app, context) { context.admin.registerTab({ id: 'test', label: 'Test', file: ${JSON.stringify(pluginPath)} }); } };`);
 Object.assign(process.env, {
   DATA_DIR: temporary, NODE_ENV: 'development', SESSION_SECRET: 'test-only-secret-with-at-least-32-characters',
-  PLEX_TOKEN: '', PLEX_URL: '', PLEX_EMAIL: '', JELLYFIN_URL: 'https://jf.example', JELLYFIN_NAME: '',
+  PLEX_URL: '', PLEX_EMAIL: '', JELLYFIN_URL: 'https://jf.example', JELLYFIN_NAME: '',
   APP_ORIGIN: 'https://dash.example', TRUST_PROXY: '', FREESTUFFCRAZY_PLUGINS_DIR: '', FREESTUFFCRAZY_PLUGIN_MODULES: pathToFileURL(pluginPath).href,
   FREESTUFFCRAZY_ADMIN: '',
   FREESTUFFCRAZY_ADMIN_TOKEN_SHA256: createHash('sha256').update('x'.repeat(64)).digest('hex'),

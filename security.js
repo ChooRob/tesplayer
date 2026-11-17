@@ -232,6 +232,7 @@ export function mediaProxyPath(path, sessionId) {
 
 export function safeError(error) {
   const message = error?.message;
-  return ['Incorrect PIN', 'Not authenticated', 'Sign-in session expired or invalid', 'Too many pending sign-ins', 'Playback capacity reached', 'Playback time limit reached', 'Too many active streams for this account'].includes(message)
+  return ['Incorrect PIN', 'Not authenticated', 'Sign-in session expired or invalid', 'Too many pending sign-ins', 'Playback capacity reached', 'Playback time limit reached', 'Too many active streams for this account',
+    'That server is not available to this account', 'That server is not reachable right now', 'None of your Plex servers are reachable right now'].includes(message)
     ? message : 'Request failed; please try again';
 }

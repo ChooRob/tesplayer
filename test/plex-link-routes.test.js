@@ -13,7 +13,7 @@ const temporary = mkdtempSync(path.join(tmpdir(), 'tesladash-link-test-'));
 const SECRET = 'test-only-secret-with-at-least-32-characters';
 Object.assign(process.env, {
   DATA_DIR: temporary, NODE_ENV: 'development', SESSION_SECRET: SECRET,
-  PLEX_TOKEN: '', PLEX_URL: 'https://plex.example', PLEX_CLIENT_ID: 'test-client', PLEX_EMAIL: 'owner@example.test',
+  PLEX_URL: 'https://plex.example', PLEX_CLIENT_ID: 'test-client', PLEX_EMAIL: 'owner@example.test',
   APP_ORIGIN: 'https://dash.example', TRUST_PROXY: '', FREESTUFFCRAZY_PLUGINS_DIR: '', FREESTUFFCRAZY_PLUGIN_MODULES: '',
   JELLYFIN_URL: '', FREESTUFFCRAZY_ADMIN: '', FREESTUFFCRAZY_ADMIN_TOKEN_SHA256: '',
 });
@@ -37,6 +37,9 @@ globalThis.fetch = async (value, options = {}) => {
       connections: [{ uri: 'https://plex.example', relay: false }] }] : []);
   }
   if (p === '/library/sections') return json({ MediaContainer: { Directory: [{ key: '1', title: 'Movies', type: 'movie' }] } });
+  if (p === '/accounts') return json({ MediaContainer: { Account: [{ id: 1, name: 'Owner' }] } });
+  if (p === '/status/sessions/history/all') return json({ MediaContainer: { Metadata: [] } });
+  if (p === '/hubs/sections/1/continueWatching' || /^\/hubs\//.test(p)) return json({ MediaContainer: { Hub: [] } });
   throw new Error(`Unexpected mocked upstream request: ${p}`);
 };
 const { app } = await import('../server.js');
@@ -66,7 +69,7 @@ function request(url, { method = 'GET', body, cookie = '' } = {}) {
 }
 const cookieFrom = (response, name) => [response.headers['set-cookie'] || []].flat().find(value => value.startsWith(name + '='))?.split(';')[0];
 const linkFile = path.join(temporary, '.plex-link.json');
-const savedToken = () => JSON.parse(readFileSync(linkFile, 'utf8')).owner.token;
+const savedLink = () => JSON.parse(readFileSync(linkFile, 'utf8')).owner;
 
 async function poll() {
   const start = await request('/api/auth/plex/pin', { method: 'POST' });
@@ -104,24 +107,37 @@ test('the owner signing in with no server on the account is told, and nothing is
 });
 
 let sessionCookie;
-test('the owner\'s first sign-in links the server, saves the token and signs in', async () => {
+test('the owner\'s first sign-in links the server, saves its address but not the token, and signs in', async () => {
   plex.pinToken = 'owner-account-token';
   const result = await poll();
   assert.equal(result.json.authenticated, true);
   sessionCookie = cookieFrom(result, 'freeStuffCrazyPlayerSession');
-  assert.equal(savedToken(), 'owner-account-token');
-  assert.ok(plex.calls.some(call => call.p === '/:/prefs' && call.token === 'owner-account-token'), 'the server was set up with the owner token');
+  const saved = savedLink();
+  assert.equal(saved.url, 'https://plex.example');
+  assert.equal(saved.machineIdentifier, 'test-server');
+  assert.ok(!readFileSync(linkFile, 'utf8').includes('owner-account-token'), 'no token reaches storage');
+  assert.ok(plex.calls.some(call => call.p === '/:/prefs' && call.token === 'owner-account-token'), 'the server\'s settings were read with the signed-in token');
   const me = await request('/api/auth/me', { cookie: sessionCookie });
   assert.equal(me.status, 200);
   const libraries = await request('/api/library/libraries', { cookie: sessionCookie });
   assert.deepEqual(libraries.json, [{ id: '1', title: 'Movies', type: 'movie' }]);
 });
 
-test('a later owner sign-in keeps the saved token current', async () => {
+test('owner-only lookups use the signed-in account\'s own token, since none is stored', async () => {
+  plex.calls.length = 0;
+  const result = await request('/api/library/ondeck', { cookie: sessionCookie });
+  assert.equal(result.status, 200, result.text);
+  const lookups = plex.calls.filter(call => call.p === '/accounts');
+  assert.ok(lookups.length > 0, 'the accounts list was read');
+  assert.ok(lookups.every(call => call.token === 'owner-account-token'), 'with the owner\'s own sign-in token');
+});
+
+test('a later owner sign-in saves no token either', async () => {
   plex.pinToken = 'newer-owner-token';
   const result = await poll();
   assert.equal(result.json.authenticated, true);
-  assert.equal(savedToken(), 'newer-owner-token');
+  assert.ok(!readFileSync(linkFile, 'utf8').includes('newer-owner-token'));
+  assert.equal(savedLink().machineIdentifier, 'test-server');
 });
 
 test('another account still cannot sign in once linked', async () => {
@@ -129,5 +145,5 @@ test('another account still cannot sign in once linked', async () => {
   plex.pinToken = 'intruder-token';
   const result = await poll();
   assert.equal(result.json.authenticated, false);
-  assert.equal(savedToken(), 'newer-owner-token', 'the saved token is untouched');
+  assert.ok(!readFileSync(linkFile, 'utf8').includes('intruder-token'), 'nothing of theirs is saved');
 });

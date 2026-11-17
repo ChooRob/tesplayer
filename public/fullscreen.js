@@ -1,8 +1,42 @@
 import { iconEl } from './icons.js';
 // Page fullscreen retains the app's controls for both playback engines.
 // Safari's video-only fullscreen is a fallback for Standard playback.
-export function isTeslaBrowser(userAgent = navigator.userAgent) {
-  return /\bTesla(?:\/|\s)|\bQtCarBrowser\b/i.test(userAgent);
+const TESLA_TOKEN = /\bTesla(?:\/|\s)|\bQtCarBrowser\b/i;
+const OVERRIDE_KEY = 'freeStuffCrazyPlayer.tesla';
+
+function storageOf() {
+  try { return globalThis.localStorage ?? null; } catch { return null; }
+}
+
+// A car whose browser does not say what it is can be told once: open the player with
+// ?tesla=1 in the address and it is remembered (?tesla=0 forgets it). Returns
+// true or false when told, and null when nobody has said.
+export function teslaOverride(search = globalThis.location?.search ?? '', storage = storageOf()) {
+  const asked = new URLSearchParams(search).get('tesla');
+  const told = asked === '1' ? true : asked === '0' ? false : null;
+  try {
+    if (told === true) storage?.setItem(OVERRIDE_KEY, '1');
+    else if (told === false) storage?.removeItem(OVERRIDE_KEY);
+    else return storage?.getItem(OVERRIDE_KEY) === '1' ? true : null;
+  } catch { /* nothing remembered */ }
+  return told;
+}
+
+export function isTeslaBrowser(userAgent = navigator.userAgent, { search, storage } = {}) {
+  return teslaOverride(search, storage) ?? TESLA_TOKEN.test(userAgent);
+}
+
+// Current Tesla software sends a user agent that looks like Chrome on desktop Linux,
+// with no mention of Tesla. What still gives it away is a touchscreen with no mouse.
+// Only a hint: the Tesla way is used with it only after ordinary fullscreen fails.
+export function looksLikeCarBrowser({
+  userAgent = navigator.userAgent,
+  touchPoints = navigator.maxTouchPoints,
+  coarsePointer = globalThis.matchMedia?.('(pointer: coarse)').matches,
+  noHover = globalThis.matchMedia?.('(hover: none)').matches,
+} = {}) {
+  const linuxDesktop = /\bX11;\s*(?:GNU\/)?Linux\b/i.test(userAgent) && !/Android|CrOS|Mobile/i.test(userAgent);
+  return linuxDesktop && (touchPoints > 0 || !!coarsePointer || !!noHover);
 }
 
 export function fullscreenMode(doc, video, tesla = false) {
@@ -30,15 +64,31 @@ export function fullscreenReturnUrl(url, playback) {
   return target.href;
 }
 
-export async function goFullscreen({ doc = document, video = null, tesla = isTeslaBrowser(), navigate = url => { window.location.href = url; }, url = window.location.href, playback = null } = {}) {
+export async function goFullscreen({
+  doc = document, video = null, tesla = isTeslaBrowser(), navigate = url => { window.location.href = url; },
+  url = window.location.href, playback = null, carLike = looksLikeCarBrowser(), settleMs = 250,
+} = {}) {
   const mode = fullscreenMode(doc, video, tesla);
-  if (mode === 'tesla') return navigate(`https://www.youtube.com/redirect?q=${encodeURIComponent(fullscreenReturnUrl(url, playback))}`);
+  // The Tesla way: a page on YouTube's domain puts the browser in fullscreen, then sends it back here.
+  const teslaWay = () => navigate(`https://www.youtube.com/redirect?q=${encodeURIComponent(fullscreenReturnUrl(url, playback))}`);
+  if (mode === 'tesla') return teslaWay();
   if (mode === 'exit-page') return (doc.exitFullscreen || doc.webkitExitFullscreen).call(doc);
   if (mode === 'exit-video') return video.webkitExitFullscreen();
   if (mode === 'page' || mode === 'webkit-page') {
     // Fullscreen the root, not the canvas alone, to retain overlay controls.
     const request = mode === 'page' ? doc.documentElement.requestFullscreen : doc.documentElement.webkitRequestFullscreen;
-    return request.call(doc.documentElement);
+    if (!carLike) return request.call(doc.documentElement);
+    // This looks like a car's browser, which may refuse or quietly ignore ordinary
+    // fullscreen (and Canvas has no video of its own to fullscreen). If it did not
+    // take, use the Tesla way; any other browser is never redirected.
+    let entered = false;
+    try {
+      await request.call(doc.documentElement);
+      if (settleMs) await new Promise(resolve => setTimeout(resolve, settleMs));
+      entered = !!(doc.fullscreenElement || doc.webkitFullscreenElement);
+    } catch { /* refused */ }
+    if (!entered) return teslaWay();
+    return undefined;
   }
   if (mode === 'video') return video.webkitEnterFullscreen();
   throw new Error('This browser cannot fullscreen this playback mode. Try Standard playback for native video fullscreen.');
@@ -73,7 +123,7 @@ export function setupFullscreenButton(btn, { video = null, getPlaybackState = ()
   }
   btn.addEventListener('click', async () => {
     status.hidden = true;
-    try { await goFullscreen({ video, tesla, playback: tesla ? getPlaybackState() : null }); }
+    try { await goFullscreen({ video, tesla, playback: getPlaybackState() }); }
     catch (err) {
       status.textContent = fullscreenMode(document, video, tesla) === 'unavailable'
         ? err.message : 'Fullscreen was blocked by the browser. Try again or use the browser’s fullscreen control.';

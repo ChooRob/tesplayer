@@ -11,46 +11,61 @@ const originalFetch = globalThis.fetch;
 const identity = id => async () => Response.json({ MediaContainer: { machineIdentifier: id } });
 const resolveTo = url => async () => url;
 
-test('a PLEX_TOKEN in the environment is used as before and never saved', async () => {
+test('it waits for the owner, and a sign-in saves the server but not the token', async () => {
   globalThis.fetch = identity('srv');
   try {
     const collection = memory();
-    const linked = [];
-    const link = createOwnerLink({ env: { PLEX_TOKEN: 'env-token' }, collection, clientId: 'c', productName: 'P',
-      resolve: resolveTo('https://plex.example'), onLinked: owner => linked.push({ ...owner }), log: quiet });
-    await link.restore();
-    assert.deepEqual(link.owner, { token: 'env-token', url: 'https://plex.example', machineIdentifier: 'srv' });
-    assert.equal(linked.length, 1);
-    assert.equal(collection.docs.size, 0);
-    await link.refresh('another-token');
-    assert.equal(link.owner.token, 'env-token', 'an environment token is never replaced');
-    assert.equal(collection.docs.size, 0);
-  } finally { globalThis.fetch = originalFetch; }
-});
-
-test('an environment token that cannot reach Plex stops startup', async () => {
-  const link = createOwnerLink({ env: { PLEX_TOKEN: 'env-token' }, collection: memory(), clientId: 'c', productName: 'P',
-    resolve: async () => { throw new Error('No reachable connection found for this Plex server'); }, log: quiet });
-  await assert.rejects(() => link.restore(), /No reachable connection/);
-});
-
-test('with no token anywhere it waits for the owner, and a sign-in saves the token', async () => {
-  globalThis.fetch = identity('srv');
-  try {
-    const collection = memory();
-    const link = createOwnerLink({ env: {}, collection, clientId: 'c', productName: 'P', resolve: resolveTo('https://plex.example'), verifyOwner: async () => true, log: quiet });
+    const seen = [];
+    const link = createOwnerLink({ env: {}, collection, clientId: 'c', productName: 'P', resolve: resolveTo('https://plex.example'), verifyOwner: async () => true,
+      onOwnerToken: (_owner, token) => seen.push(token), log: quiet });
     await link.restore();
     assert.equal(link.owner.url, null);
     await link.connect('owner-token', { remember: true });
-    assert.equal(link.owner.url, 'https://plex.example');
-    assert.equal(collection.docs.get('owner').token, 'owner-token');
+    assert.deepEqual({ ...link.owner }, { url: 'https://plex.example', machineIdentifier: 'srv' });
+    const saved = collection.docs.get('owner');
+    assert.equal(saved.url, 'https://plex.example');
+    assert.equal(saved.machineIdentifier, 'srv');
+    assert.ok(!JSON.stringify(saved).includes('owner-token'), 'the token is not saved');
+    assert.deepEqual(seen, ['owner-token'], 'the token is offered once, to use and forget');
     await link.refresh('newer-token');
-    assert.equal(link.owner.token, 'newer-token');
-    assert.equal(collection.docs.get('owner').token, 'newer-token');
+    assert.equal('token' in link.owner, false, 'a later sign-in does not keep its token either');
+    assert.ok(!JSON.stringify(collection.docs.get('owner')).includes('newer-token'));
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test('a saved token is used on the next start without anyone signing in', async () => {
+test('a saved server is used on the next start with no token and no network', async () => {
+  globalThis.fetch = async () => { throw new Error('nothing may be contacted'); };
+  try {
+    const collection = memory({ owner: { url: 'https://plex.example', machineIdentifier: 'srv', savedAt: 1 } });
+    const linked = [];
+    const link = createOwnerLink({ env: {}, collection, clientId: 'c', productName: 'P', resolve: async () => { throw new Error('nothing may be resolved'); },
+      onLinked: owner => linked.push({ ...owner }), log: quiet });
+    await link.restore();
+    assert.deepEqual({ ...link.owner }, { url: 'https://plex.example', machineIdentifier: 'srv' });
+    assert.equal(linked.length, 1);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('a moved server is followed at the owner\'s next sign-in, and only if it is the same server', async () => {
+  globalThis.fetch = async url => Response.json({ MediaContainer: { machineIdentifier: String(url).startsWith('https://moved.example') ? 'srv' : 'other' } });
+  try {
+    const collection = memory({ owner: { url: 'https://old.example', machineIdentifier: 'srv' } });
+    let answer = 'https://moved.example';
+    const link = createOwnerLink({ env: {}, collection, clientId: 'c', productName: 'P', resolve: async () => answer, log: quiet });
+    await link.restore();
+    await link.refresh('owner-token');
+    assert.equal(link.owner.url, 'https://moved.example');
+    assert.equal(collection.docs.get('owner').url, 'https://moved.example');
+    answer = 'https://impostor.example';
+    await link.refresh('owner-token');
+    assert.equal(link.owner.url, 'https://moved.example', 'an address that is a different server is ignored');
+    answer = null;
+    await link.refresh('owner-token');
+    assert.equal(link.owner.url, 'https://moved.example', 'an unreachable server keeps the saved address');
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('a token saved by an earlier version is used once, then only the server is kept', async () => {
   globalThis.fetch = identity('srv');
   try {
     const collection = memory({ owner: { token: 'saved-token', savedAt: 1 } });
@@ -60,6 +75,10 @@ test('a saved token is used on the next start without anyone signing in', async 
     await link.restore();
     assert.deepEqual(used, ['saved-token']);
     assert.equal(link.owner.url, 'https://plex.example');
+    assert.equal('token' in link.owner, false);
+    const saved = collection.docs.get('owner');
+    assert.ok(!('token' in saved), 'the old token is gone from storage');
+    assert.equal(saved.machineIdentifier, 'srv');
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -87,7 +106,7 @@ test('an owner sign-in while a saved token is failing links with the fresh token
       resolve: async ({ token }) => { if (token === 'revoked') throw new Error('unauthorized'); return 'https://plex.example'; }, verifyOwner: async () => true, log: quiet });
     await link.restore();
     await link.connect('fresh-token', { remember: true });
-    assert.equal(link.owner.token, 'fresh-token');
+    assert.equal('token' in link.owner, false);
     assert.equal(link.owner.url, 'https://plex.example');
   } finally { globalThis.fetch = originalFetch; }
 });

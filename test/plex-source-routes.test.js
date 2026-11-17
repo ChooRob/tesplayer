@@ -31,7 +31,7 @@ export default {
 globalThis.__limitKeys = [];
 Object.assign(process.env, {
   DATA_DIR: temporary, NODE_ENV: 'development', SESSION_SECRET: SECRET,
-  PLEX_TOKEN: 'test-owner-token', PLEX_URL: 'https://plex.example', PLEX_CLIENT_ID: 'test-client', PLEX_EMAIL: 'owner@example.test',
+  PLEX_URL: 'https://plex.example', PLEX_CLIENT_ID: 'test-client', PLEX_EMAIL: 'owner@example.test',
   APP_ORIGIN: 'https://dash.example', TRUST_PROXY: '', FREESTUFFCRAZY_PLUGINS_DIR: '', JELLYFIN_URL: '', FREESTUFFCRAZY_ADMIN: '',
   FREESTUFFCRAZY_PLUGIN_MODULES: pathToFileURL(pluginPath).href,
   // With the admin area configured, sign-ins are recorded for account search.

@@ -1,4 +1,4 @@
-# <img src="https://freestuffcrazy.com/icons/freestuffcrazy-logo.svg" alt="FreeStuffCrazy" height="48" align="absmiddle"> Player
+<h1 align="center"><img src="assets/readme-banner.svg" alt="FreeStuffCrazy Player" width="560"></h1>
 
 Watch your Plex or Jellyfin library in a Tesla browser. A passenger can use it while the car is moving! Tesla support depends on the car's browser version, and its cellular connection can be slow. See the [FAQ](FAQ.md) for known issues.
 

@@ -91,6 +91,7 @@
   <script type="module">
     import { renderMetadata } from "/metadata.js";
     import { hydrateIcons, iconEl } from "/icons.js";
+    import { browseUrlFrom, carryBrowseView } from "/browse-location.js";
     hydrateIcons();
     const fmtTime = (s) => {
       s = Math.max(0, Math.floor(s || 0));
@@ -100,8 +101,7 @@
     };
 
     // Set before loading so Back still works when the item fails to load.
-    const returnTab = new URLSearchParams(location.search).get('tab');
-    document.getElementById('back').href = `/browse${returnTab ? `?tab=${encodeURIComponent(returnTab)}` : ''}`;
+    document.getElementById('back').href = browseUrlFrom(location.search);
 
     async function main() {
       const params = new URLSearchParams(location.search);
@@ -134,8 +134,7 @@
 
       document.getElementById('playBtn').addEventListener('click', () => {
         const playParams = new URLSearchParams({ key: item.ratingKey });
-        const tab = params.get('tab');
-        if (tab) playParams.set('tab', tab);
+        carryBrowseView(location.search, playParams);
         window.location.href = `/canvas2?${playParams}`;
       });
       document.getElementById('watchedBtn').addEventListener('click', async (ev) => {

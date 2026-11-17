@@ -22,14 +22,14 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
   // Single tenant (no plugin choosing servers): only the Plex account whose
   // confirmed email is PLEX_EMAIL may sign in; its Home profiles still can.
   const SIGN_IN_EMAIL = firstPluginWith(plugins, 'resolveServer') ? null : plexEmail(env);
-  // PLEX_TOKEN is optional here: without it, the server's credential is saved
-  // the first time that account signs in (see plex-owner-link.js).
-  if (!env.PLEX_TOKEN && !SIGN_IN_EMAIL) throw new Error('Missing PLEX_TOKEN in environment');
+  // The server's address and ID are saved the first time that account signs in; no
+  // Plex token is kept (see plex-owner-link.js).
+  const PLUGIN_CHOOSES_SERVER = !!firstPluginWith(plugins, 'resolveServer');
   const CLIENT_ID = env.PLEX_CLIENT_ID || installationId();
   const PRODUCT_NAME = config.plex.productName;
 
-  // Default to the owner's token for setup; content routes pass the profile token.
-  function plexHeaders(token = owner.token) {
+  // Content routes pass the profile token.
+  function plexHeaders(token) {
     return {
       'X-Plex-Client-Identifier': CLIENT_ID,
       ...plexDeviceHeaders(PRODUCT_NAME),
@@ -39,8 +39,8 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
     };
   }
 
-  // The server's own credential and the Plex server it reaches. The library
-  // and played threshold are set up once that server is known.
+  // The Plex server this install belongs to. The played threshold is read whenever the
+  // owner's token is at hand.
   const ownerLink = createOwnerLink({
     env, clientId: CLIENT_ID, productName: PRODUCT_NAME, collection: store.collection('plex-link'),
     onLinked: async (linked) => {
@@ -49,19 +49,31 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
       // so the same server's data stays in one bucket regardless of which URI a
       // session happens to resolve to.
       localProgress.bindLegacyServer(linked.machineIdentifier, store);
-      // Use the server's played threshold; fall back to 90% if unavailable.
+    },
+    // Use the server's played threshold; 90% until it has been read.
+    onOwnerToken: async (linked, token) => {
+      if (thresholdRead || !token) return;
       try {
-        const prefsRes = await fetch(`${linked.url}/:/prefs`, { headers: { Accept: 'application/json', 'X-Plex-Token': linked.token }, signal: AbortSignal.timeout(10000), redirect: 'error' });
+        const prefsRes = await fetch(`${linked.url}/:/prefs`, { headers: { Accept: 'application/json', 'X-Plex-Token': token }, signal: AbortSignal.timeout(10000), redirect: 'error' });
         const prefsData = await prefsRes.json();
         const pref = (prefsData.MediaContainer.Setting || []).find((setting) => setting.id === 'LibraryVideoPlayedThreshold');
         if (pref?.value != null) localProgress.setFinishedThreshold(Number(pref.value) / 100, linked.machineIdentifier);
+        thresholdRead = true;
       } catch (err) {
         console.warn(`Couldn't read LibraryVideoPlayedThreshold from Plex; using 90% default: ${safeError(err)}`);
       }
     },
   });
+  let thresholdRead = false;
   const owner = ownerLink.owner;
-  await ownerLink.restore();
+  // With a plugin choosing each viewer's server there is no server of this install's own.
+  if (PLUGIN_CHOOSES_SERVER) {
+    // Progress saved before it was kept per server belongs to a server only the owner
+    // link could name, and there is none here. Anything already kept per server is untouched.
+    localProgress.bindLegacyServer('legacy-unassigned', store);
+  } else {
+    await ownerLink.restore();
+  }
 
   // Accounts seen at sign-in, so admin pages can find them by name. Only kept
   // when the admin area is configured; nothing else reads it.
@@ -90,9 +102,8 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
   function tokenForRequest(req) {
     const token = req && plexAuth.getSessionPlexToken(req);
     if (req && config.auth.enabled && !token) throw new Error('Not authenticated');
-    const usable = token || owner.token;
-    if (!usable) throw new Error('Plex is not linked yet');
-    return usable;
+    if (!token) throw new Error('Not authenticated');
+    return token;
   }
 
   // Mirrors tokenForRequest -- which Plex server this request's token is
@@ -105,7 +116,6 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
   function libraryFor(token, plexUrl = owner.url, clientId = CLIENT_ID) {
     return createPlexLibrary({ plexUrl, token, clientId, productName: PRODUCT_NAME });
   }
-  const adminLibrary = () => libraryFor(owner.token);
 
   // A stable identifier per Home profile, not one app-wide CLIENT_ID for
   // everyone, so Plex's hub personalization resolves the right account.
@@ -119,10 +129,11 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
     return libraryFor(tokenForRequest(req), urlForRequest(req), clientIdForRequest(req));
   }
 
-  // Owner-only lookups use the admin token for this install's own server;
-  // any other (genuinely different) server uses the requester's own token.
+  // Owner-only lookups (the account list and watch history) use the signed-in
+  // account's own token, not the Home profile's. When this is the server's owner,
+  // which it always is on a single-tenant install, that is the owner's token.
   function adminLibraryFor(req, url) {
-    return plexAuth.getSessionMachineIdentifier(req) === owner.machineIdentifier ? adminLibrary() : libraryFor(tokenForRequest(req), url, clientIdForRequest(req));
+    return libraryFor(plexAuth.getSessionCredential(req)?.accountToken || tokenForRequest(req), url);
   }
 
   // Keys local-progress.js's storage by physical server, not connection URI.
@@ -401,7 +412,46 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
   // session and auth middleware; these paths are public in plex-auth.js.
   function registerRoutes(app, { rateLimit, endPlayback }) {
     app.use('/api/auth/plex/pin', rateLimit({ maximum: 10, windowMs: 600000 }));
-    app.use(['/api/auth/plex/select-user', '/api/auth/switch-user'], rateLimit({ maximum: 20, windowMs: 600000 }));
+    app.use(['/api/auth/plex/select-user', '/api/auth/switch-user', '/api/auth/plex/select-server', '/api/auth/plex/servers', '/api/auth/plex/switch-server'], rateLimit({ maximum: 20, windowMs: 600000 }));
+
+    // Finishes a sign-in once the profile, and so its own token, is known. An account
+    // whose servers answer more than one is asked to choose; with one answering it goes
+    // straight there; an install with a single server never asks. `serverId` is a
+    // choice already made. Listing never stops a sign-in: if it fails, the first
+    // server that answers is used, as before.
+    async function finishSignIn(res, { consume, login, accountToken, profileToken, profile, pinId, serverId = null, serverCount = 1 }) {
+      let chosen = serverId;
+      if (!chosen) {
+        const list = await plexAuth.listServers(profileToken).catch(() => null);
+        if (list?.ok && list.servers.length > 1) {
+          serverCount = list.servers.length;
+          const online = list.servers.filter((server) => server.online);
+          if (!online.length) return res.json({ authenticated: false, pending: false, error: 'None of your Plex servers are reachable right now' });
+          if (online.length === 1) {
+            chosen = online[0].id;
+          } else {
+            // The choice's next request reads the profile's token back from the encrypted login cookie.
+            login.remember(accountToken, { profileToken, serverCount, profile: { id: profile.id, title: profile.title, thumb: profile.thumb, admin: !!profile.admin } });
+            return res.json({ authenticated: false, pending: false, needsServerSelection: true, pinId, servers: list.servers });
+          }
+        }
+      }
+      const resolved = await plexAuth.resolveServer(profileToken, chosen ? { serverId: chosen } : undefined);
+      if (!resolved.ok) {
+        return res.json({ authenticated: false, pending: false, error: chosen && resolved.error ? resolved.error : 'This Plex account is not authorized for this server' });
+      }
+      // Use the per-server accessToken resolveServer found (see plex-auth.js), not the
+      // profile's account token: PMS hub personalization needs the server-scoped token,
+      // not one that merely proves identity (confirmed by direct testing -- the local
+      // hub endpoints fall back to the server owner's data otherwise).
+      await plexAuth.setSession(res, {
+        accountToken, profileToken, userToken: resolved.accessToken || profileToken,
+        title: profile.title, thumb: profile.thumb, profileId: profile.id, admin: profile.admin,
+        plexUrl: resolved.plexUrl, machineIdentifier: resolved.machineIdentifier, serverName: resolved.serverName, serverCount,
+      });
+      consume();
+      res.json({ authenticated: true });
+    }
 
     app.post('/api/auth/plex/pin', async (req, res) => {
       try {
@@ -423,9 +473,11 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
             // Deliberately vague: nothing about which account, or how it is chosen.
             return res.json({ authenticated: false, pending: false, error: 'This Plex account can\'t sign in to this server.' });
           }
-          // The first time the owner signs in with no PLEX_TOKEN set, this finds
-          // and saves the server; later sign-ins keep the saved token current.
-          if (!owner.url) {
+          // The first time the owner signs in, this finds and saves the server's address;
+          // later sign-ins keep that address current. (Not with a plugin choosing servers.)
+          if (PLUGIN_CHOOSES_SERVER) {
+            // Each viewer's server is chosen below; there is none to link.
+          } else if (!owner.url) {
             try { await ownerLink.connect(accountToken, { remember: true }); }
             catch (err) {
               // Server log only; the viewer gets the generic message below.
@@ -433,7 +485,7 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
               return res.json({ authenticated: false, pending: false, error: 'Signed in, but no Plex server owned by this account could be reached. Check that the server is online, then try again.' });
             }
           } else {
-            await ownerLink.refresh(accountToken).catch(() => console.warn('Could not save the refreshed Plex sign-in'));
+            await ownerLink.refresh(accountToken).catch(() => console.warn('Could not refresh the Plex server address'));
           }
 
           const users = await plexAuth.listHomeUsers(accountToken);
@@ -452,17 +504,8 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
             });
           }
 
-          const resolved = await plexAuth.resolveServer(accountToken);
-          if (!resolved.ok) {
-            return res.json({ authenticated: false, pending: false, error: 'This Plex account is not authorized for this server' });
-          }
-          // No Home picker here (single-user account). Use the per-server
-          // accessToken resolveServer found (see plex-auth.js), not the raw
-          // account token -- PMS hub personalization needs the server-scoped
-          // token, not just an account token that merely proves identity.
-          await plexAuth.setSession(res, { accountToken, userToken: resolved.accessToken || accountToken, title: users[0]?.title, thumb: users[0]?.thumb, profileId: users[0]?.id, admin: users[0]?.admin, plexUrl: resolved.plexUrl, machineIdentifier: resolved.machineIdentifier });
-          consume();
-          res.json({ authenticated: true });
+          // No Home picker here (single-user account).
+          return finishSignIn(res, { consume, login, accountToken, profileToken: accountToken, profile: users[0], pinId });
         });
       } catch (err) {
         res.status(502).json({ error: safeError(err) });
@@ -486,23 +529,51 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
           // resolving via whichever account actually owns the request's
           // client identifier. See switchHomeUser's own comment.
           const switchedToken = await plexAuth.switchHomeUser(accountToken, userId, pin, `${CLIENT_ID}-${picked.id}`);
-          const resolved = await plexAuth.resolveServer(switchedToken);
-          if (!resolved.ok) {
-            return res.json({ authenticated: false, error: 'This Plex account is not authorized for this server' });
-          }
-          // resolved.accessToken is the per-server token Plex.tv's resources
-          // list issues for this profile+server pairing -- not switchedToken
-          // (the account-level token switchHomeUser returns). Confirmed by
-          // direct testing that only the resource-scoped accessToken gets
-          // correctly personalized hub reads from the local PMS; switchedToken
-          // proves identity but local hub endpoints silently fall back to the
-          // server owner's data for it. See plex-auth.js's findServerResource.
-          await plexAuth.setSession(res, { accountToken, userToken: resolved.accessToken || switchedToken, title: picked.title, thumb: picked.thumb, profileId: picked.id, admin: picked.admin, plexUrl: resolved.plexUrl, machineIdentifier: resolved.machineIdentifier });
-          consume();
-          res.json({ authenticated: true });
+          return finishSignIn(res, { consume, login, accountToken, profileToken: switchedToken, profile: picked, pinId });
         });
       } catch (err) {
         res.status(safeError(err) === 'Incorrect PIN' ? 401 : 502).json({ error: safeError(err) });
+      }
+    });
+
+    // Finishes a sign-in that was waiting for the viewer to choose a server. The choice
+    // can only be one of the profile's own servers: the plugin looks it up on plex.tv.
+    app.post('/api/auth/plex/select-server', async (req, res) => {
+      const { pinId, serverId } = req.body || {};
+      if (!pinId || typeof serverId !== 'string' || !serverId || serverId.length > 100) return res.status(400).json({ error: 'pinId and serverId required' });
+      try {
+        await plexAuth.withLogin(req, res, pinId, async (consume, login) => {
+          const { accountToken, pending } = login;
+          if (!accountToken || !pending) throw new Error('Sign-in session expired or invalid');
+          await finishSignIn(res, { consume, login, accountToken, profileToken: pending.profileToken, profile: pending.profile, pinId, serverId, serverCount: pending.serverCount });
+        });
+      } catch (err) {
+        res.status(502).json({ error: safeError(err) });
+      }
+    });
+
+    // The servers this signed-in profile can switch between, and the one it is on.
+    app.get('/api/auth/plex/servers', async (req, res) => {
+      res.set('Cache-Control', 'no-store');
+      try {
+        res.json(await plexAuth.listServersForSession(req));
+      } catch (err) {
+        res.status(safeError(err) === 'Not authenticated' ? 401 : 502).json({ error: safeError(err) });
+      }
+    });
+
+    // Moves this session to another of the profile's servers without a new sign-in.
+    // Playback on the old server stops first.
+    app.post('/api/auth/plex/switch-server', async (req, res) => {
+      const { serverId } = req.body || {};
+      if (typeof serverId !== 'string' || !serverId || serverId.length > 100) return res.status(400).json({ error: 'serverId required' });
+      try {
+        await endPlayback(req);
+        await plexAuth.switchServerForSession(req, res, serverId);
+        res.json({ ok: true });
+      } catch (err) {
+        const message = safeError(err);
+        res.status(message === 'Not authenticated' ? 401 : 502).json({ error: message });
       }
     });
 

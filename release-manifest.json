@@ -137,5 +137,13 @@
   "test/stats-hooks.test.js",
   "Caddyfile",
   "Caddyfile.public-ip",
-  "PLUGIN_DEVELOPMENT.md"
+  "PLUGIN_DEVELOPMENT.md",
+  "public/view-guard.js",
+  "test/view-guard.test.js",
+  "public/browse-location.js",
+  "test/browse-location.test.js",
+  "test/jellyfin-server-prompt.test.js",
+  "assets/readme-banner.svg",
+  "test/readme-banner.test.js",
+  "test/plex-server-choice.test.js"
 ]

@@ -1,6 +1,6 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { IncomingMessage, ServerResponse } from 'node:http';
@@ -13,11 +13,13 @@ const temporary = mkdtempSync(path.join(tmpdir(), 'tesladash-prod-logging-'));
 const SECRET = 'test-only-secret-with-at-least-32-characters';
 Object.assign(process.env, {
   DATA_DIR: temporary, NODE_ENV: 'production', SESSION_SECRET: SECRET,
-  PLEX_TOKEN: 'test-owner-token', PLEX_URL: 'https://plex.example', PLEX_CLIENT_ID: 'test-client', PLEX_EMAIL: 'owner@example.test',
+  PLEX_URL: 'https://plex.example', PLEX_CLIENT_ID: 'test-client', PLEX_EMAIL: 'owner@example.test',
   APP_ORIGIN: 'https://dash.example', TRUST_PROXY: '127.0.0.1', FREESTUFFCRAZY_PLUGINS_DIR: '', FREESTUFFCRAZY_PLUGIN_MODULES: '',
   JELLYFIN_URL: '', FREESTUFFCRAZY_ADMIN: '', FREESTUFFCRAZY_ADMIN_TOKEN_SHA256: '',
 });
 
+// The owner has signed in before: the server's address and ID are saved.
+writeFileSync(path.join(temporary, '.plex-link.json'), JSON.stringify({ owner: { url: 'https://plex.example', machineIdentifier: 'test-server' } }), { mode: 0o600 });
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (value) => {
   const p = new URL(value).pathname;

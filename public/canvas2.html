@@ -399,6 +399,7 @@
     import { createQuotaGuard } from '/engine/quota-guard.js';
     import { createPlaybackBanner } from '/playback-banner.js';
     import { createNextCountdown } from '/engine/next-countdown.js';
+    import { browseUrlFrom, carryBrowseView } from '/browse-location.js';
     import { createMediaSession } from '/media-session.js';
 
     fetch('/api/plugin/frontend').then(res => res.ok ? res.json() : null).then(async assets => {
@@ -657,8 +658,8 @@
       }
 
       // Reload the originating browse tab to refresh its content after playback.
-      const returnTab = urlParams.get('tab');
-      const returnUrl = `/browse${returnTab ? `?tab=${encodeURIComponent(returnTab)}` : ''}`;
+      // Back returns to the same tab, show and season the viewer came from.
+      const returnUrl = browseUrlFrom(location.search);
       const backLinkEl = document.getElementById('backLink');
       backLinkEl.href = returnUrl;
       backLinkEl.addEventListener('click', (ev) => {
@@ -1088,9 +1089,11 @@
         const target = new URL('/canvas2', location.origin);
         target.searchParams.set('key', nextEpisode.ratingKey);
         // Keep where we came from and how the viewer plays; quality is chosen afresh.
-        for (const name of ['tab', 'playback']) {
+        for (const name of ['playback']) {
           if (urlParams.has(name)) target.searchParams.set(name, urlParams.get(name));
         }
+        // The next episode may be in another season, so Back goes to the show, not the season.
+        carryBrowseView(location.search, target.searchParams, { keepSeason: false });
         location.replace(target);
       }
       playNextBtn.addEventListener('click', playNextEpisode);

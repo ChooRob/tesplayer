@@ -6,9 +6,9 @@ import path from 'node:path';
 import { IncomingMessage, ServerResponse } from 'node:http';
 import { Socket } from 'node:net';
 
-// With a plugin that chooses each viewer's server, PLEX_TOKEN still names this
-// install's own server and the owner link must stay out of the way: anyone with
-// access can sign in, the plugin's server is used, and nothing is saved.
+// With a plugin that chooses each viewer's server the install has no server of its
+// own and the owner link must stay out of the way: anyone with access can sign in,
+// the plugin's server is used, and nothing is saved.
 const temporary = mkdtempSync(path.join(tmpdir(), 'tesladash-multitenant-link-test-'));
 const pluginPath = path.join(temporary, 'chooser-plugin.js');
 writeFileSync(pluginPath, `export default { resolveServer: async (userToken) => (
@@ -16,7 +16,7 @@ writeFileSync(pluginPath, `export default { resolveServer: async (userToken) => 
 ) };\n`);
 Object.assign(process.env, {
   DATA_DIR: temporary, NODE_ENV: 'development', SESSION_SECRET: 'test-only-secret-with-at-least-32-characters',
-  PLEX_TOKEN: 'env-owner-token', PLEX_URL: 'https://plex.example', PLEX_CLIENT_ID: 'test-client', PLEX_EMAIL: '',
+  PLEX_URL: 'https://plex.example', PLEX_CLIENT_ID: 'test-client', PLEX_EMAIL: '',
   APP_ORIGIN: 'https://dash.example', TRUST_PROXY: '', FREESTUFFCRAZY_PLUGINS_DIR: '', JELLYFIN_URL: '', FREESTUFFCRAZY_ADMIN: '',
   FREESTUFFCRAZY_PLUGIN_MODULES: new URL(`file://${pluginPath}`).href,
 });
@@ -63,8 +63,8 @@ function request(url, { cookie = '', method = 'GET' } = {}) {
 }
 const cookieFrom = (response, name) => [response.headers['set-cookie'] || []].flat().find(value => value.startsWith(name + '='))?.split(';')[0];
 
-test('the server is set up from PLEX_TOKEN at startup, with no sign-in needed', () => {
-  assert.ok(calls.some(call => call.url.pathname === '/:/prefs' && call.token === 'env-owner-token'));
+test('nothing is looked up for a server of the install\'s own at startup', () => {
+  assert.equal(calls.filter(call => call.url.hostname === 'plex.example').length, 0);
 });
 
 test('any account can sign in, the plugin chooses the server, and nothing is saved', async () => {
@@ -73,6 +73,6 @@ test('any account can sign in, the plugin chooses the server, and nothing is sav
   assert.equal(poll.json.authenticated, true);
   const cookie = cookieFrom(poll, 'freeStuffCrazyPlayerSession');
   assert.equal((await request('/api/auth/me', { cookie })).status, 200);
-  assert.equal(existsSync(path.join(temporary, '.plex-link.json')), false, 'the environment token is never replaced or copied to storage');
+  assert.equal(existsSync(path.join(temporary, '.plex-link.json')), false, 'nothing is saved');
   assert.ok(!calls.some(call => call.token === 'stranger-token' && call.url.pathname === '/:/prefs'));
 });

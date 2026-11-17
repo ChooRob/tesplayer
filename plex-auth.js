@@ -33,7 +33,7 @@ const sealer = createCookieSealer(SESSION_SECRET);
 rmSync(path.join(dataDir, '.sessions.json'), { force: true });
 
 // Only the login page, its assets and explicit authentication endpoints are public.
-const PUBLIC_PATHS = new Set(['/login', '/login.html', '/safe-navigation.js', '/api/auth/plex/pin', '/api/auth/plex/poll', '/api/auth/plex/select-user', '/api/auth/plex/avatar']);
+const PUBLIC_PATHS = new Set(['/login', '/login.html', '/safe-navigation.js', '/api/auth/plex/pin', '/api/auth/plex/poll', '/api/auth/plex/select-user', '/api/auth/plex/select-server', '/api/auth/plex/avatar']);
 
 // Parse the flat attribute-only XML returned by Plex Home endpoints when needed.
 function decodeXmlEntities(str) {
@@ -57,9 +57,9 @@ function parseXmlTags(xml, tagName) {
   return results;
 }
 
-// `owner` is the server's own Plex credential (see plex-owner-link.js). Its url,
-// token and machineIdentifier are read when needed, because with no PLEX_TOKEN
-// they only exist once the owner has signed in.
+// `owner` is the Plex server this install belongs to (see plex-owner-link.js). Its url
+// and machineIdentifier are read when needed, because they only exist once the owner
+// has signed in. With a plugin that chooses each viewer's server there is no owner.
 export function createPlexAuth({ owner, clientId, productName, plugins = [], store, sourceId = 'plex', onAccount = null, signedIn = null }) {
   // "Sign out everywhere" bumps an account's number here; cookies carrying an
   // older number are rejected. Only Plex account IDs and counters, no secrets.
@@ -103,10 +103,18 @@ export function createPlexAuth({ owner, clientId, productName, plugins = [], sto
     for (const [key, expires] of completedPins) if (expires <= Date.now()) completedPins.delete(key);
     const state = sealer.open('login', parseCookies(req.headers.cookie)[LOGIN_COOKIE_NAME]);
     if (!state || state.pinId !== String(pinId) || completedPins.has(state.pinId)) throw new Error('Sign-in session expired or invalid');
+    const waiting = state.pending;
     const login = {
       accountToken: typeof state.accountToken === 'string' ? state.accountToken : null,
+      // A sign-in that is waiting for a server to be chosen: the profile's own token
+      // and who the profile is, so the choice can finish it (see select-server).
+      pending: waiting && typeof waiting.profileToken === 'string' && waiting.profile && typeof waiting.profile === 'object'
+        ? { profileToken: waiting.profileToken, profile: waiting.profile, serverCount: Number.isInteger(waiting.serverCount) ? waiting.serverCount : 1 }
+        : null,
       // Keep the account token for the profile picker, inside the encrypted cookie.
-      remember(accountToken) { setLoginCookie(res, { pinId: state.pinId, accountToken }); },
+      remember(accountToken, pendingChoice = null) {
+        setLoginCookie(res, { pinId: state.pinId, accountToken, ...(pendingChoice ? { pending: pendingChoice } : {}) });
+      },
     };
     return operation(() => {
       if (completedPins.size < 10000) completedPins.set(state.pinId, Date.now() + LOGIN_TTL_MS);
@@ -260,6 +268,12 @@ export function createPlexAuth({ owner, clientId, productName, plugins = [], sto
     const owner = firstPluginWith(plugins, 'resolveServer');
     return owner ? owner.resolveServer(userToken, options) : defaultResolveServer(userToken);
   }
+  // A plugin that lets viewers use any server of theirs can also list them, so the
+  // sign-in page can offer a choice. Null when this install has just the one.
+  async function listServers(userToken) {
+    const lister = firstPluginWith(plugins, 'listServers');
+    return lister ? lister.listServers(userToken) : null;
+  }
 
   // A session lasts this long after its last renewal; activity renews it daily.
   const SESSION_MAX_AGE_MS = config.auth.sessionDays * 24 * 60 * 60 * 1000;
@@ -275,7 +289,7 @@ export function createPlexAuth({ owner, clientId, productName, plugins = [], sto
   // Keep the account token for Home switching and the active profile token
   // for media access -- both only inside the encrypted cookie.
   // `signIn` is false when an already signed-in viewer only switches profile.
-  async function setSession(res, { accountToken, userToken, title, thumb, profileId, admin, plexUrl: sessionPlexUrl, machineIdentifier: sessionMachineIdentifier, signIn = true }) {
+  async function setSession(res, { accountToken, profileToken, userToken, title, thumb, profileId, admin, plexUrl: sessionPlexUrl, machineIdentifier: sessionMachineIdentifier, serverName, serverCount, signIn = true }) {
     // The account ID ties the cookie to "sign out everywhere". If plex.tv
     // can't confirm it right now the session still works, but only expiry ends it.
     const accountId = (await identityForToken(accountToken).catch(() => null))?.id ?? null;
@@ -284,6 +298,9 @@ export function createPlexAuth({ owner, clientId, productName, plugins = [], sto
       accountId,
       generation: await generationFor(accountId),
       accountToken,
+      // The profile's own account-level token (the account token itself for a profile
+      // that needs no switch): what lists this profile's servers when it changes server.
+      profileToken: profileToken || accountToken,
       userToken: userToken || accountToken,
       title: title || null,
       thumb: thumb || null,
@@ -297,6 +314,9 @@ export function createPlexAuth({ owner, clientId, productName, plugins = [], sto
       // know "is this literally my own configured server" (e.g. owner-only
       // account lookups) must compare this, not plexUrl, against it.
       machineIdentifier: sessionMachineIdentifier || null,
+      // What the user menu shows, and whether it offers "Switch server".
+      serverName: typeof serverName === 'string' && serverName ? serverName.slice(0, 80) : null,
+      serverCount: Number.isInteger(serverCount) && serverCount > 0 ? Math.min(serverCount, 99) : 1,
       iat: Date.now(),
     } });
     if (signIn && accountId) signedIn?.({ sourceType: 'plex', userKey: `plex:${accountId}` });
@@ -308,8 +328,9 @@ export function createPlexAuth({ owner, clientId, productName, plugins = [], sto
   const openedSessions = new WeakMap();
   async function loadSession(req, _res, next) {
     // Until the owner has linked the server there is nothing a session could
-    // reach, so everyone is signed out and the login page does the linking.
-    if (!owner.url) { openedSessions.set(req, null); return next(); }
+    // reach, so everyone is signed out and the login page does the linking. A plugin
+    // that chooses each viewer's server has no server of its own to link.
+    if (!owner.url && !firstPluginWith(plugins, 'resolveServer')) { openedSessions.set(req, null); return next(); }
     try {
       const opened = unpackSession(sealer.open('session', parseCookies(req.headers.cookie)[COOKIE_NAME]),
         { legacySourceId: sourceId, legacyType: 'plex' });
@@ -432,9 +453,39 @@ export function createPlexAuth({ owner, clientId, productName, plugins = [], sto
     if (!resolved.ok) throw new Error(resolved.error || 'This Plex user does not have access to this server');
     // resolved.accessToken, not switchedToken -- see select-user's comment
     // in server.js and findServerResource above.
-    await setSession(res, { accountToken: session.accountToken, userToken: resolved.accessToken || switchedToken,
+    await setSession(res, { accountToken: session.accountToken, profileToken: switchedToken, userToken: resolved.accessToken || switchedToken,
       title: picked.title, thumb: picked.thumb, profileId: picked.id, admin: picked.admin,
-      plexUrl: resolved.plexUrl, machineIdentifier: resolved.machineIdentifier, signIn: false });
+      plexUrl: resolved.plexUrl, machineIdentifier: resolved.machineIdentifier,
+      serverName: resolved.serverName || session.serverName, serverCount: session.serverCount, signIn: false });
+  }
+
+  // The servers this signed-in profile can switch between, and which one it is on.
+  async function listServersForSession(req) {
+    const session = getSession(req);
+    if (!session) throw new Error('Not authenticated');
+    const list = await listServers(session.profileToken || session.accountToken);
+    if (!list) throw new Error('This install does not offer a choice of server');
+    if (!list.ok) throw new Error(list.error || 'Could not list your servers');
+    return { servers: list.servers, current: session.machineIdentifier };
+  }
+
+  // Moves the session to another of the profile's own servers, with no new sign-in.
+  async function switchServerForSession(req, res, serverId) {
+    const session = getSession(req);
+    if (!session) throw new Error('Not authenticated');
+    const token = session.profileToken || session.accountToken;
+    const resolved = await resolveServer(token, { serverId });
+    if (!resolved.ok) throw new Error(resolved.error || 'That server is not available');
+    await setSession(res, { accountToken: session.accountToken, profileToken: session.profileToken, userToken: resolved.accessToken || token,
+      title: session.title, thumb: session.thumb, profileId: session.profileId, admin: session.admin,
+      plexUrl: resolved.plexUrl, machineIdentifier: resolved.machineIdentifier,
+      serverName: resolved.serverName, serverCount: session.serverCount, signIn: false });
+  }
+
+  // For the user menu: the server this session is on, and whether there is another to switch to.
+  async function getSessionServer(req) {
+    const session = getSession(req);
+    return session?.serverName ? { name: session.serverName, switchable: (session.serverCount ?? 1) > 1 } : null;
   }
 
   async function getVerifiedProfile(req) {
@@ -462,7 +513,8 @@ export function createPlexAuth({ owner, clientId, productName, plugins = [], sto
     isPublicPath: path => PUBLIC_PATHS.has(path),
     // The signed-in Plex credential (tokens included) for trusted server code only.
     getSessionCredential: req => getSession(req)?.credential ?? null,
-    createPin, checkPin, userHasServerAccess, resolveServer, setSession, clearSession, signOutEverywhere, loadSession, requireAuth,
+    createPin, checkPin, userHasServerAccess, resolveServer, listServers, setSession, clearSession, signOutEverywhere, loadSession, requireAuth,
+    listServersForSession, switchServerForSession, getSessionServer,
     listHomeUsers, switchHomeUser, getSessionUser, getSessionPlexToken,
     listHomeUsersForSession, switchUserForSession, getSessionProfileId, getSessionIsAdmin,
     getSessionPlexUrl, getSessionAccountKey, getSessionAccountId, getSessionIdentity, getSessionMachineIdentifier, getMachineIdentifier,

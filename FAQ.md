@@ -32,3 +32,9 @@ Check the **Volume** slider in the Adjustments panel (the tune button). Boosting
 ## Why don't the steering wheel Next and Previous buttons work?
 
 Tesla keeps those buttons unavailable to web pages. Use the player's 30-second back and forward controls. The wheel's play/pause button works; a press while paused resumes playback.
+
+## The Fullscreen button does nothing in my Tesla
+
+In a Tesla, the player enters fullscreen by briefly opening a YouTube redirect page that sends you straight back to the same spot in the video. It does this when the car's browser says it is a Tesla, and also when it looks like one and refuses ordinary fullscreen. Because it passes through youtube.com, YouTube sees the player's address for that moment.
+
+If it still does nothing, open the player once with `?tesla=1` added to the address, for example `https://player.freestuffcrazy.com/browse?tesla=1`. The player remembers it. Use `?tesla=0` to turn it off again.

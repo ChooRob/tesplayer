@@ -51,10 +51,24 @@ export function parseJellyfinUrl(value) {
 
 // A jellyfinServers plugin's wording for the server question on the login
 // page: short plain strings only, or null to keep the page's own.
-function serverPrompt(prompt) {
+// A link the login page offers when the typed address does not work, such as to a
+// plugin that connects servers that are not on the internet. Plain https only.
+function promptHelp(help) {
+  if (!help || typeof help !== 'object') return undefined;
+  const text = (value, max) => (typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : undefined);
+  let url;
+  try {
+    const parsed = new URL(String(help.url ?? ''));
+    if (parsed.protocol === 'https:' && !parsed.username && !parsed.password && parsed.href.length <= 300) url = parsed.href;
+  } catch { /* not an address */ }
+  const result = { text: text(help.text, 200), label: text(help.label, 60), url };
+  return result.text && result.label && result.url ? result : undefined;
+}
+
+export function serverPrompt(prompt) {
   if (!prompt || typeof prompt !== 'object') return null;
   const text = (value, max) => (typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : undefined);
-  const result = { hint: text(prompt.hint, 200), label: text(prompt.label, 40), placeholder: text(prompt.placeholder, 60) };
+  const result = { hint: text(prompt.hint, 200), label: text(prompt.label, 40), placeholder: text(prompt.placeholder, 60), help: promptHelp(prompt.help) };
   return Object.values(result).some(Boolean) ? result : null;
 }
 

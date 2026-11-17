@@ -259,6 +259,8 @@
   <script type="module">
     import { renderMetadata } from "/metadata.js";
     import { getTabs, getTab } from "/tab-registry.js";
+    import { createViewGuard, wasAborted } from "/view-guard.js";
+    import { readBrowseView, writeBrowseView } from "/browse-location.js";
     const pageHeaderEl = document.querySelector('.pageHeader');
     const toolbarEl = document.querySelector('.toolbar');
     const librariesEl = document.getElementById('libraries');
@@ -272,14 +274,25 @@
     const searchInput = document.getElementById('searchInput');
 
     let currentLibraryId = null;
+    let currentShowKey = null; // the show whose seasons or episodes are on screen, if any
+    let currentSeasonKey = null; // the season whose episodes are on screen, if any
+    // Continue Watching belongs to a library's own page; a late load or the periodic
+    // refresh must not bring it back above a show, a season, search results or a plugin tab.
+    let onLibraryPage = false;
     let libraries = [];
     let currentLibraryItems = []; // the active tab's full, unfiltered item list -- what search filters against
     let activePluginTab = null; // currently-open plugin tab (see tab-registry.js), if any
+    // A slow response for an earlier tab must never draw over the current one (see view-guard.js).
+    const viewGuard = createViewGuard();
 
-    // Persist the active tab without adding a browser history entry.
-    function setTabQueryParam(id) {
+    // Keep the screen (tab, show, season) in the address without adding a browser
+    // history entry, so a reload comes back to the same place and the player's and
+    // detail page's Back links can return to it (see browse-location.js).
+    function rememberView({ show = null, season = null } = {}) {
+      currentShowKey = show;
+      currentSeasonKey = show ? season : null;
       const url = new URL(location.href);
-      url.searchParams.set('tab', id);
+      writeBrowseView(url.searchParams, { tab: currentLibraryId, show: currentShowKey, season: currentSeasonKey });
       history.replaceState(null, '', url);
     }
 
@@ -426,13 +439,13 @@
         card.addEventListener('click', () => playItem(item));
         continueRow.appendChild(card);
       }
-      showContinueSection(true);
+      showContinueSection(onLibraryPage);
       continueRow.updateCarouselButtons();
     }
 
 
-    async function fetchJson(url) {
-      const res = await fetch(url);
+    async function fetchJson(url, { signal } = {}) {
+      const res = await fetch(url, { signal });
       if (!res.ok) {
         // The server may explain the failure for the viewer (with a code).
         const data = await res.json().catch(() => null);
@@ -471,9 +484,9 @@
       if (isResumable(item)) {
         params.set('resume', String(Math.max(0, Math.floor(item.viewOffset / 1000) - 3)));
       }
-      // Carries the active tab through so the player's back link can
-      // return straight to it (see canvas2.html).
-      if (currentLibraryId) params.set('tab', currentLibraryId);
+      // Carries the active tab, show and season through so the player's back link
+      // can return straight to this screen (see canvas2.html).
+      writeBrowseView(params, { tab: currentLibraryId, show: currentShowKey, season: currentSeasonKey });
       window.location.href = `/canvas2?${params}`;
     }
 
@@ -484,7 +497,7 @@
         playItem(item);
       } else {
         const params = new URLSearchParams({ key: item.ratingKey });
-        if (currentLibraryId) params.set('tab', currentLibraryId);
+        writeBrowseView(params, { tab: currentLibraryId, show: currentShowKey, season: currentSeasonKey });
         window.location.href = `/detail?${params}`;
       }
     }
@@ -714,8 +727,10 @@
 
     // Update shared navigation; each plugin renders its own tab content.
     async function openPluginTab(tab) {
+      viewGuard.begin(); // a library still loading must not draw behind this tab
+      onLibraryPage = false;
       currentLibraryId = tab.id;
-      setTabQueryParam(tab.id);
+      rememberView();
       backEl.style.display = 'none';
       showContinueSection(false);
       showRecentSection(false);
@@ -727,8 +742,10 @@
     }
 
     async function openLibrary(lib) {
+      const view = viewGuard.begin();
+      onLibraryPage = true;
       currentLibraryId = lib.id;
-      setTabQueryParam(lib.id);
+      rememberView();
       backEl.style.display = 'none';
       closeActiveTab();
       gridEl.style.display = '';
@@ -742,16 +759,21 @@
       loadingEl.textContent = `Loading ${lib.title}…`;
       clearGrid();
       try {
-        const { items } = await fetchJson(`/api/library/library/${lib.id}?sort=titleSort`);
+        const { items } = await fetchJson(`/api/library/library/${lib.id}?sort=titleSort`, { signal: view.signal });
+        if (!view.isCurrent()) return; // another tab was chosen while this was loading
         loadingEl.textContent = '';
         currentLibraryItems = items;
         renderGrid(items);
       } catch (err) {
+        if (!view.isCurrent() || wasAborted(err)) return;
         loadingEl.textContent = `Failed to load: ${err.message}`;
       }
     }
 
     async function openShowSeasons(ratingKey, title) {
+      const view = viewGuard.begin();
+      onLibraryPage = false;
+      rememberView({ show: ratingKey });
       showContinueSection(false);
       showRecentSection(false);
       hideDetailHeader();
@@ -764,9 +786,10 @@
       clearGrid();
       try {
         const [seasons, showItem] = await Promise.all([
-          fetchJson(`/api/library/show/${ratingKey}/seasons`),
-          fetchJson(`/api/library/item/${ratingKey}`).catch(() => null),
+          fetchJson(`/api/library/show/${ratingKey}/seasons`, { signal: view.signal }),
+          fetchJson(`/api/library/item/${ratingKey}`, { signal: view.signal }).catch(() => null),
         ]);
+        if (!view.isCurrent()) return;
         loadingEl.textContent = '';
         if (seasons.length === 1) {
           // Skip the seasons screen when there's nothing to choose between;
@@ -783,11 +806,15 @@
         }
         renderGrid(seasons);
       } catch (err) {
+        if (!view.isCurrent() || wasAborted(err)) return;
         loadingEl.textContent = `Failed to load: ${err.message}`;
       }
     }
 
     async function openSeason(season, { skippedSeasons = false } = {}) {
+      const view = viewGuard.begin();
+      onLibraryPage = false;
+      rememberView({ show: season.showRatingKey || null, season: season.ratingKey });
       showContinueSection(false);
       showRecentSection(false);
       hideDetailHeader();
@@ -799,9 +826,10 @@
       clearGrid();
       try {
         const [episodes, showItem] = await Promise.all([
-          fetchJson(`/api/library/season/${season.ratingKey}/episodes`),
-          season.showRatingKey ? fetchJson(`/api/library/item/${season.showRatingKey}`).catch(() => null) : null,
+          fetchJson(`/api/library/season/${season.ratingKey}/episodes`, { signal: view.signal }),
+          season.showRatingKey ? fetchJson(`/api/library/item/${season.showRatingKey}`, { signal: view.signal }).catch(() => null) : null,
         ]);
+        if (!view.isCurrent()) return;
         loadingEl.textContent = '';
         if (showItem) {
           renderDetailHeader(showItem, { subtitle: season.title, poster: season.thumbnail, onBack });
@@ -810,16 +838,20 @@
         }
         renderGrid(episodes, { episode: true });
       } catch (err) {
+        if (!view.isCurrent() || wasAborted(err)) return;
         loadingEl.textContent = `Failed to load: ${err.message}`;
       }
     }
 
     // Filter the loaded library items; plugin tabs manage their own content.
-    function runSearch(query) {
+    async function runSearch(query) {
       if (activePluginTab?.onSearch) {
         activePluginTab.onSearch(query);
         return;
       }
+      const view = viewGuard.begin(); // results replace whatever was still loading
+      onLibraryPage = false;
+      rememberView(); // results are not a place to come back to, so the address is the library's
       showContinueSection(false);
       showRecentSection(false);
       hideDetailHeader();
@@ -830,6 +862,19 @@
         const lib = libraries.find((l) => l.id === currentLibraryId) || libraries[0];
         if (lib) openLibrary(lib);
       });
+      // A page restored on a show or season has not loaded the library's list yet.
+      if (!currentLibraryItems.length && currentLibraryId) {
+        loadingEl.textContent = 'Searching…';
+        clearGrid();
+        try {
+          currentLibraryItems = (await fetchJson(`/api/library/library/${currentLibraryId}?sort=titleSort`, { signal: view.signal })).items;
+        } catch (err) {
+          if (!view.isCurrent() || wasAborted(err)) return;
+          loadingEl.textContent = `Failed to load: ${err.message}`;
+          return;
+        }
+        if (!view.isCurrent()) return;
+      }
       const q = query.trim().toLowerCase();
       const results = currentLibraryItems.filter((item) => item.title.toLowerCase().includes(q));
       loadingEl.textContent = results.length ? '' : `No results for "${query}"`;
@@ -842,6 +887,29 @@
       const query = searchInput.value.trim();
       if (query) runSearch(query);
     });
+
+    // Go straight to a show's seasons, or to one season's episodes, as when the page
+    // was left. The library tab it belongs to stays highlighted and is where Back goes.
+    async function restoreShowView(lib, showKey, seasonKey) {
+      currentLibraryId = lib.id;
+      [...librariesEl.children].forEach((btn) => btn.classList.toggle('active', btn.dataset.id === lib.id));
+      gridEl.style.display = '';
+      if (!seasonKey) return openShowSeasons(showKey, 'this show');
+      // The show's season list has everything a season needs, and says whether
+      // the show has just one season (which skips the season list).
+      const view = viewGuard.begin();
+      loadingEl.textContent = 'Loading…';
+      try {
+        const seasons = await fetchJson(`/api/library/show/${showKey}/seasons`, { signal: view.signal });
+        if (!view.isCurrent()) return;
+        const season = seasons.find((candidate) => String(candidate.ratingKey) === seasonKey);
+        if (!season) return openShowSeasons(showKey, 'this show'); // the season is gone; show the show
+        return openSeason(season, { skippedSeasons: seasons.length === 1 });
+      } catch (err) {
+        if (!view.isCurrent() || wasAborted(err)) return;
+        return openLibrary(lib); // the show could not be loaded: fall back to its library
+      }
+    }
 
     async function main() {
       loadingEl.textContent = 'Loading libraries…';
@@ -863,11 +931,14 @@
         librariesEl.appendChild(btn);
       }
 
-      const requestedTab = new URLSearchParams(location.search).get('tab');
+      const { tab: requestedTab, show: requestedShow, season: requestedSeason } = readBrowseView(location.search);
       const requestedLibrary = libraries.find((l) => l.id === requestedTab);
       const requestedPluginTab = getTab(requestedTab);
       if (requestedPluginTab) {
         openPluginTab(requestedPluginTab);
+      } else if (requestedShow && libraries.length) {
+        // A reload (or Back from the player) on a show or season returns there.
+        restoreShowView(requestedLibrary || libraries[0], requestedShow, requestedSeason);
       } else if (requestedLibrary) {
         openLibrary(requestedLibrary);
       } else if (libraries.length) {

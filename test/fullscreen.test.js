@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fullscreenMode, goFullscreen } from '../public/fullscreen.js';
+import { fullscreenMode, goFullscreen, isTeslaBrowser, looksLikeCarBrowser, teslaOverride } from '../public/fullscreen.js';
 const base = () => ({ documentElement: {}, fullscreenEnabled: false });
 test('ordinary browsers fullscreen the whole page and toggle exit', async () => {
   let calls = 0;
@@ -86,4 +86,87 @@ test('Tesla live streams rejoin live without adding VOD resume parameters', asyn
   await goFullscreen({ doc: base(), tesla: true, url,
     playback: { currentTime: 100, paused: false }, navigate(value) { destination = value; } });
   assert.equal(new URL(destination).searchParams.get('q'), url);
+});
+
+// What the car in the dev access log sends: Chrome on desktop Linux, no mention of Tesla.
+const CAR = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
+
+test('a browser that looks like a car\'s is spotted by its touchscreen, not by its name', () => {
+  assert.equal(looksLikeCarBrowser({ userAgent: CAR, touchPoints: 10, coarsePointer: false, noHover: false }), true);
+  assert.equal(looksLikeCarBrowser({ userAgent: CAR, touchPoints: 0, coarsePointer: true, noHover: false }), true);
+  assert.equal(looksLikeCarBrowser({ userAgent: CAR, touchPoints: 0, coarsePointer: false, noHover: true }), true);
+  // The same user agent on a desktop with a mouse is not a car.
+  assert.equal(looksLikeCarBrowser({ userAgent: CAR, touchPoints: 0, coarsePointer: false, noHover: false }), false);
+  for (const userAgent of [
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148 Mobile Safari/537.36',
+    'Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+  ]) assert.equal(looksLikeCarBrowser({ userAgent, touchPoints: 10, coarsePointer: true, noHover: true }), false, userAgent);
+});
+
+function carDoc({ takes }) {
+  const doc = { fullscreenEnabled: true, documentElement: {} };
+  doc.documentElement.requestFullscreen = takes === 'yes'
+    ? () => { doc.fullscreenElement = doc.documentElement; return Promise.resolve(); }
+    : takes === 'ignores' ? () => Promise.resolve() : () => Promise.reject(new Error('Fullscreen is not allowed'));
+  return doc;
+}
+const carOptions = (doc, urls) => ({ doc, tesla: false, carLike: true, settleMs: 0, url: 'https://player.example/canvas2?key=5&quality=high', playback: { currentTime: 412.5, paused: false }, navigate: url => urls.push(url) });
+
+test('on a car, Canvas fullscreen that the browser refuses or ignores uses the Tesla way, keeping the position', async () => {
+  for (const takes of ['refuses', 'ignores']) {
+    const urls = [];
+    await goFullscreen(carOptions(carDoc({ takes }), urls));
+    assert.equal(urls.length, 1, takes);
+    assert.match(urls[0], /^https:\/\/www\.youtube\.com\/redirect\?q=/);
+    const back = new URL(decodeURIComponent(urls[0].split('?q=')[1]));
+    assert.equal(back.searchParams.get('resume'), '412.5', 'the player comes back where it was');
+    assert.equal(back.searchParams.get('paused'), '0');
+  }
+});
+
+test('on a car whose browser does fullscreen properly, nothing is redirected', async () => {
+  const urls = [];
+  await goFullscreen(carOptions(carDoc({ takes: 'yes' }), urls));
+  assert.deepEqual(urls, []);
+});
+
+test('a car-like browser in the Standard player is handled the same way', async () => {
+  const urls = [];
+  const video = { hidden: false, style: {}, readyState: 4 };
+  await goFullscreen({ ...carOptions(carDoc({ takes: 'refuses' }), urls), video });
+  assert.equal(urls.length, 1);
+});
+
+test('an ordinary browser that refuses is still never redirected, even with a touchscreen', async () => {
+  const urls = [];
+  const options = { ...carOptions(carDoc({ takes: 'refuses' }), urls), carLike: false };
+  await assert.rejects(goFullscreen(options));
+  assert.deepEqual(urls, []);
+});
+
+test('a browser that says it is a Tesla always takes the Tesla way', async () => {
+  const urls = [];
+  await goFullscreen({ ...carOptions(carDoc({ takes: 'yes' }), urls), tesla: true });
+  assert.equal(urls.length, 1);
+  assert.equal(isTeslaBrowser('Mozilla/5.0 (X11; GNU/Linux) AppleWebKit/601.1 (KHTML, like Gecko) Tesla/2023.44.30.8 Safari/601.1', { search: '', storage: null }), true);
+  assert.equal(isTeslaBrowser(CAR, { search: '', storage: null }), false, 'the real car\'s user agent is not enough on its own');
+});
+
+test('?tesla=1 tells the player it is in a Tesla, is remembered, and ?tesla=0 forgets it', () => {
+  const data = new Map();
+  const storage = { getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value), removeItem: key => data.delete(key) };
+  assert.equal(teslaOverride('', storage), null);
+  assert.equal(teslaOverride('?tesla=1', storage), true);
+  assert.equal(teslaOverride('', storage), true, 'remembered on later visits');
+  assert.equal(isTeslaBrowser(CAR, { search: '', storage }), true);
+  assert.equal(teslaOverride('?tesla=0', storage), false);
+  assert.equal(teslaOverride('', storage), null, 'forgotten');
+  assert.equal(teslaOverride('?tesla=maybe', storage), null, 'anything else is ignored');
+  // Storage that throws (private browsing) still honours the address.
+  const broken = { getItem() { throw new Error('no'); }, setItem() { throw new Error('no'); }, removeItem() { throw new Error('no'); } };
+  assert.equal(teslaOverride('?tesla=1', broken), true);
+  assert.equal(teslaOverride('', broken), null);
 });

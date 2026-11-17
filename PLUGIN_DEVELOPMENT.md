@@ -13,7 +13,8 @@ export default {
   registerRoutes(app, context) { /* add Express routes */ },
   publicPaths: ['/my-page'], // exact paths of the plugin's own routes that work signed out
   getFrontendAssets() { return { scripts: ['/my-tab.js'] }; },
-  resolveServer(userToken) { /* override which Plex server a login lands on */ },
+  resolveServer(userToken, { serverId }) { /* override which Plex server a login lands on; serverId = one the viewer chose */ },
+  listServers(userToken) { /* { ok, servers: [{ id, name, owned, sharedBy, online, relayOnly }] }: offered when an account has several */ },
   getAccountKey(session) { /* group a person across devices/sessions */ },
   getStartQualityCap(req) { /* 'low' to start this client at the lowest quality, else null */ },
   getQuotaStatus(accountKey) { /* { remainingSeconds, resetAt, breakdown?: [{ label, seconds }] } | null */ },

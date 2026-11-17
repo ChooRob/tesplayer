@@ -27,7 +27,7 @@ export default {
 `);
 Object.assign(process.env, {
   DATA_DIR: temporary, NODE_ENV: 'development', SESSION_SECRET: SECRET,
-  PLEX_TOKEN: '', PLEX_URL: '', JELLYFIN_URL: '', JELLYFIN_NAME: '',
+  PLEX_URL: '', JELLYFIN_URL: '', JELLYFIN_NAME: '',
   APP_ORIGIN: 'https://dash.example', TRUST_PROXY: '', FREESTUFFCRAZY_PLUGINS_DIR: '',
   FREESTUFFCRAZY_PLUGIN_MODULES: pathToFileURL(pluginPath).href,
   // Even a named Jellyfin admin is never recognized on users' own servers.

@@ -6,14 +6,10 @@ import path from 'node:path';
 import { IncomingMessage, ServerResponse } from 'node:http';
 import { Socket } from 'node:net';
 
-// A resolveServer plugin can legitimately resolve a *different*, equally
-// valid connection URI for the same physical server this install booted
-// with -- Plex's own resources listing can offer more than one working
-// address for one machineIdentifier. "Is this my own configured server"
-// must compare machineIdentifier, not plexUrl strings, or owner-only calls
-// (accounts(), used to personalize Continue Watching) fall back to a
-// non-admin token and fail closed. This test uses a minimal stand-in
-// resolveServer plugin that resolves to a URI differing from PLEX_URL.
+// Owner-only calls (accounts(), used to personalize Continue Watching) must use the
+// signed-in *account's* token, not the Home profile's: a child profile's token is not
+// allowed to list every PMS account and the call fails closed. This test uses a
+// minimal stand-in resolveServer plugin that resolves to its own connection URI.
 const temporary = mkdtempSync(path.join(tmpdir(), 'tesladash-resolve-server-test-'));
 const pluginPath = path.join(temporary, 'stub-resolve-server-plugin.js');
 writeFileSync(pluginPath, `export default { resolveServer: async () => (
@@ -22,7 +18,7 @@ writeFileSync(pluginPath, `export default { resolveServer: async () => (
 const pluginUrl = new URL(`file://${pluginPath}`).href;
 Object.assign(process.env, {
   DATA_DIR: temporary, NODE_ENV: 'development', SESSION_SECRET: 'test-only-secret-with-at-least-32-characters',
-  PLEX_TOKEN: 'test-owner-token', PLEX_URL: 'https://plex.example', PLEX_CLIENT_ID: 'test-client',
+  PLEX_URL: 'https://plex.example', PLEX_CLIENT_ID: 'test-client',
   APP_ORIGIN: 'https://dash.example', TRUST_PROXY: '', FREESTUFFCRAZY_PLUGINS_DIR: '', JELLYFIN_URL: '', FREESTUFFCRAZY_ADMIN: '', FREESTUFFCRAZY_PLUGIN_MODULES: pluginUrl,
 });
 writeFileSync(path.join(temporary, '.sessions.json'), '{}', { mode: 0o644 });
@@ -51,10 +47,9 @@ globalThis.fetch = async (value, options = {}) => {
     }]);
   }
   if (url.pathname === '/accounts') {
-    // Only the admin's own host+token may list every PMS account -- the
-    // regression this test guards against sent this to the resolved
-    // session URI (and a non-admin token) instead.
-    if (url.hostname !== 'plex.example') return new Response('restricted', { status: 401 });
+    // Only the account's own token may list every PMS account -- the regression
+    // this test guards against sent the signed-in child profile's token instead.
+    if (options.headers?.['X-Plex-Token'] !== 'test-account-token') return new Response('restricted', { status: 401 });
     return json({ MediaContainer: { Account: [{ id: 1, name: 'Owner' }, { id: 20, name: 'Child' }] } });
   }
   if (url.pathname === '/status/sessions/history/all') return json({ MediaContainer: { Metadata: [] } });
@@ -85,7 +80,7 @@ function request(url, { method = 'GET', body, cookie = '', origin = 'https://das
 }
 const cookieFrom = (response, name) => [response.headers['set-cookie'] || []].flat().find(value => value.startsWith(name + '='))?.split(';')[0];
 
-test('a profile whose session resolves to a different-but-same-server URI still gets personalized next-up, not a 502 or someone else\'s data', async () => {
+test('a child profile still gets personalized next-up, because owner-only lookups use the account token, not the profile\'s', async () => {
   const start = await request('/api/auth/plex/pin', { method: 'POST' });
   const loginCookie = cookieFrom(start, 'freeStuffCrazyPlayerLogin');
   const picker = await request(`/api/auth/plex/poll?id=${start.json.id}`, { cookie: loginCookie });
@@ -106,8 +101,8 @@ test('a profile whose session resolves to a different-but-same-server URI still 
 
   const accountsCall = calls.find((call) => call.url.pathname === '/accounts');
   assert.ok(accountsCall, 'expected an /accounts lookup to personalize Continue Watching');
-  assert.equal(accountsCall.url.hostname, 'plex.example', 'owner-only /accounts must go to the admin\'s own host, not wherever this session happened to resolve to');
-  assert.equal(accountsCall.options.headers['X-Plex-Token'], 'test-owner-token', 'owner-only /accounts must use the admin token, not the signed-in profile\'s own token');
+  assert.equal(accountsCall.url.hostname, 'alt-connection.example', 'owner-only /accounts goes to the server the session resolved to');
+  assert.equal(accountsCall.options.headers['X-Plex-Token'], 'test-account-token', 'owner-only /accounts must use the account\'s token, not the signed-in profile\'s own token');
   assert.equal(accountsCall.options.headers['X-Plex-Device'], accountsCall.options.headers['X-Plex-Product']);
   assert.equal(accountsCall.options.headers['X-Plex-Device-Name'], accountsCall.options.headers['X-Plex-Product']);
 });
