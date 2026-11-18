@@ -27,7 +27,7 @@ test('a name that does not resolve stops startup without repeating the name', as
   });
 });
 
-test('names are looked up again every 10 minutes and the setting follows a new address', async t => {
+test('names are looked up again every 10 minutes and failed names lose their trusted addresses', async t => {
   mock.timers.enable({ apis: ['setInterval'] });
   t.after(() => mock.timers.reset());
   assert.equal(RESOLVE_EVERY_MS, 600000);
@@ -49,9 +49,53 @@ test('names are looked up again every 10 minutes and the setting follows a new a
   delete table.caddy;
   mock.timers.tick(RESOLVE_EVERY_MS);
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(set.length, 2, 'a failed lookup keeps the last good address');
+  assert.deepEqual(set.at(-1), ['trust proxy', []], 'a failed lookup removes the old address');
   assert.equal(warnings.length, 1);
   assert.ok(!warnings[0].includes('caddy'));
+  stop();
+});
+
+test('a failed name does not remove static entries or another resolved name', async t => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  t.after(() => mock.timers.reset());
+  const table = {
+    caddy: [{ address: '172.18.0.2', family: 4 }],
+    gateway: [{ address: '172.18.0.3', family: 4 }],
+  };
+  const set = [];
+  const stop = await applyTrustProxy({ set: (_name, value) => set.push(value) }, 'loopback,caddy,gateway', {
+    lookup: dnsOf(table), warn: () => {},
+  });
+  delete table.caddy;
+  mock.timers.tick(RESOLVE_EVERY_MS);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(set.at(-1), ['loopback', '172.18.0.3/32']);
+  stop();
+});
+
+test('refreshes do not overlap when a lookup takes longer than the interval', async t => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  t.after(() => mock.timers.reset());
+  let finishLookup;
+  let calls = 0;
+  const lookup = async () => {
+    calls++;
+    if (calls === 1) return [{ address: '172.18.0.2', family: 4 }];
+    if (calls === 2) return new Promise(resolve => { finishLookup = resolve; });
+    return [{ address: '172.18.0.9', family: 4 }];
+  };
+  const set = [];
+  const stop = await applyTrustProxy({ set: (_name, value) => set.push(value) }, 'caddy', { lookup });
+  mock.timers.tick(RESOLVE_EVERY_MS);
+  assert.equal(calls, 2);
+  mock.timers.tick(RESOLVE_EVERY_MS);
+  assert.equal(calls, 2, 'a second refresh is skipped while the first is pending');
+  finishLookup([{ address: '172.18.0.4', family: 4 }]);
+  await new Promise(resolve => setImmediate(resolve));
+  mock.timers.tick(RESOLVE_EVERY_MS);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 3);
+  assert.deepEqual(set.at(-1), ['172.18.0.9/32']);
   stop();
 });
 
