@@ -7,6 +7,7 @@ import { installationId, dataDir } from './private-storage.js';
 import { createRecentlyMarked } from './recently-marked.js';
 import { nextEpisodeAfter, showIdFromKey } from './next-episode.js';
 import { openStore } from './storage.js';
+import { applyTrustProxy } from './trust-proxy.js';
 import { existsSync, readFileSync, writeFileSync, appendFileSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { AUTO_QUALITY_LEVELS, QUALITY_LEVELS, qualityTiers } from './public/engine/quality-tiers.js';
@@ -115,7 +116,7 @@ async function accountKeyForRequest(req) {
 
 export const app = express();
 app.disable('x-powered-by');
-if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY.split(',').map(value => value.trim()));
+if (process.env.TRUST_PROXY) await applyTrustProxy(app, process.env.TRUST_PROXY);
 // First middleware so every response -- including 400/401/403/429 rejections
 // below -- gets logged, not just successful requests.
 app.use(accessLog(path.join(dataDir, 'access.log')));
