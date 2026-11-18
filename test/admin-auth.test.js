@@ -121,6 +121,7 @@ test('token unlock is opt-in and passkeys independently authorize an admin sessi
 
   const { admin, request } = fixture(t, true);
   admin.registerTab({ id: 'minutes', label: 'Minutes', file: '/minutes.js' });
+  admin.registerTab({ id: 'usage', label: 'Usage', file: '/usage.js', order: -1 });
   assert.equal((await request(endpoint + '/options', { method: 'POST' })).status, 403);
   const { body: options } = await request(endpoint + '/options', { method: 'POST', bearer: token });
   assert.equal(options.rp.id, 'admin.example.test');
@@ -131,6 +132,7 @@ test('token unlock is opt-in and passkeys independently authorize an admin sessi
   assert.equal((await request('/api/admin/example', { bearer: token })).body.code, 'ADMIN_LOCKED');
   assert.equal((await request('/api/admin/auth/token', { method: 'POST', bearer: token })).status, 200);
   assert.deepEqual((await request('/api/admin/example')).body, { account: 'plex:123' });
+  assert.deepEqual((await request('/api/admin/tabs')).body.tabs.map(tab => tab.id), ['usage', 'minutes'], 'a lower order comes first');
   await request('/api/admin/auth/lock', { method: 'POST' });
 
   const authentication = '/api/admin/auth/passkeys/authenticate';

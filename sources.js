@@ -11,49 +11,68 @@
 //   registerRoutes(app, context)   -- the backend's own sign-in routes
 //   library(req)                   -- libraries, libraryItems, recentlyAdded,
 //                                     showSeasons, showEpisodes, seasonEpisodes,
-//                                     itemDetails, search, continueWatching
+//                                     itemDetails, search, continueWatching,
+//                                     and optionally subtitleTracks(itemId) and
+//                                     subtitleText(itemId, trackId) (see subtitles.js)
 //   sendThumbnail(req, res)
 //   watchState                     -- reportProgress, markWatched, markUnwatched
 //   playback                       -- start, proxy, stop, directCapable, mediaOrigin
 //   accounts                       -- search(query), describe(key) for admin
 //                                     pages; see accounts.js
 //
-// Plugins can add backend types by exporting `sources: { <type>: factory }`.
+// Plugins add backend types by exporting
+//   sources: { <type>: { configure(env, { plugins }), warnings?(env), create(args) } }
+// Plex and Jellyfin are exported the same way, by bundled-sources.js, and always loaded.
+// `configure(env, { plugins })` says whether this install uses the type: return null when it
+// does not, or an options object (possibly empty) when it does, or throw an Error
+// whose message names the setting at fault (never its value) to show a setup
+// problem on the login page. `create({ id, config, plugins, store, pipeUpstream,
+// signedIn, options })` returns the shape above; its `id` is the type. See
+// "Writing a source" in PLUGIN_DEVELOPMENT.md.
 
-import { createPlexSource } from './plex-source.js';
-import { createJellyfinSource, parseJellyfinUrl, tenantServersOf } from './jellyfin-source.js';
-import { plexEmail } from './admin-auth.js';
-import { firstPluginWith } from './plugins.js';
+import { bundledSources, PLEX_EMAIL_FORMAT } from './bundled-sources.js';
 
-const BUILT_IN = { plex: createPlexSource, jellyfin: createJellyfinSource };
+export { PLEX_EMAIL_FORMAT };
+const SOURCE_TYPE = /^[a-z0-9-]{1,32}$/;
+
+// The source types plugins export (the bundled Plex and Jellyfin first), as
+// { type, create, configure, warnings }. A bare
+// function is accepted as `create` but is never set up, since nothing says when.
+function pluginSourceTypes(plugins) {
+  const found = [];
+  for (const plugin of [bundledSources, ...plugins]) {
+    for (const [type, entry] of Object.entries(plugin.sources || {})) {
+      const create = typeof entry === 'function' ? entry : entry?.create;
+      const configure = typeof entry === 'function' ? null : entry?.configure;
+      const warnings = typeof entry === 'function' ? null : entry?.warnings;
+      if (typeof create !== 'function' || (configure != null && typeof configure !== 'function') || (warnings != null && typeof warnings !== 'function')) throw new Error(`Invalid source factory for ${type}`);
+      if (!SOURCE_TYPE.test(type)) throw new Error(`Invalid source type ${type}`);
+      if (found.some(other => other.type === type)) throw new Error(`Duplicate source type ${type}`);
+      found.push({ type, create, configure, warnings });
+    }
+  }
+  return found;
+}
 
 export const NOTHING_CONFIGURED = 'No media server is set up. In the server\'s .env, set PLEX_EMAIL (the Plex account that signs in) for Plex, or JELLYFIN_URL for Jellyfin, then restart.';
-export const PLEX_EMAIL_FORMAT = 'PLEX_EMAIL must be the email address of the Plex account that signs in, such as you@example.com.';
 
-// The built-in sources this install is set up for, and what is wrong with the
-// setup. A single-tenant install names its Plex account with PLEX_EMAIL (the
-// server is found when that account first signs in) and its Jellyfin server with
-// JELLYFIN_URL; a plugin that chooses servers needs neither. Problems name the setting at fault, never its value,
+// The sources this install is set up for, and what is wrong with the setup: each
+// source type (the bundled Plex and Jellyfin, then any from plugins) says for
+// itself whether it is used. Problems name the setting at fault, never its value,
 // and don't stop the server: the login page shows them. Warnings are only
 // logged. The first source listed is the default.
 export function checkSourceConfig(env = process.env, plugins = []) {
   const configured = [];
   const problems = [];
   const warnings = [];
-  const pluginChoosesPlexServer = !!firstPluginWith(plugins, 'resolveServer');
-  if (env.PLEX_EMAIL?.trim()) {
-    if (!plexEmail(env)) problems.push(PLEX_EMAIL_FORMAT);
-    else configured.push({ id: 'plex', type: 'plex' });
-  } else if (pluginChoosesPlexServer) {
-    configured.push({ id: 'plex', type: 'plex' });
-  }
-  if (env.PLEX_TOKEN) warnings.push('PLEX_TOKEN is no longer used. The player does not keep a Plex token; you can remove it from .env.');
-  if (env.JELLYFIN_URL) {
+  for (const { type, configure, warnings: warn } of pluginSourceTypes(plugins)) {
+    if (warn) warnings.push(...warn(env));
+    if (!configure) continue;
     try {
-      parseJellyfinUrl(env.JELLYFIN_URL);
-      configured.push({ id: 'jellyfin', type: 'jellyfin' });
-    } catch (error) { problems.push(error.message); }
-  } else if (tenantServersOf(plugins)) configured.push({ id: 'jellyfin', type: 'jellyfin' });
+      const options = configure(env, { plugins });
+      if (options) configured.push({ id: type, type, ...(typeof options === 'object' ? options : {}) });
+    } catch (error) { problems.push(error?.message || `The ${type} source is not set up correctly.`); }
+  }
   if (!configured.length && !problems.length) problems.push(NOTHING_CONFIGURED);
   return { configured, problems, warnings };
 }
@@ -63,19 +82,47 @@ export const configuredSources = (env = process.env, plugins = []) => checkSourc
 // An empty result is allowed: the server then only serves the login page,
 // which shows the setup problems.
 export async function createSources({ plugins = [], configured = configuredSources(process.env, plugins), context }) {
-  const factories = { ...BUILT_IN };
-  for (const plugin of plugins) {
-    for (const [type, factory] of Object.entries(plugin.sources || {})) {
-      if (typeof factory !== 'function') throw new Error(`Invalid source factory for ${type}`);
-      if (Object.hasOwn(factories, type)) throw new Error(`Duplicate source type ${type}`);
-      factories[type] = factory;
-    }
-  }
+  const factories = {};
+  for (const { type, create } of pluginSourceTypes(plugins)) factories[type] = create;
   const sources = new Map();
   for (const { id, type, ...options } of configured) {
-    if (typeof id !== 'string' || !/^[a-z0-9-]{1,32}$/.test(id) || sources.has(id)) throw new Error(`Invalid source id ${id}`);
+    if (typeof id !== 'string' || !SOURCE_TYPE.test(id) || sources.has(id)) throw new Error(`Invalid source id ${id}`);
     if (!Object.hasOwn(factories, type)) throw new Error(`Unknown source type ${type}`);
-    sources.set(id, await factories[type]({ id, ...context, options }));
+    const source = await factories[type]({ id, ...context, options });
+    const problems = sourceProblems(source, { id, type });
+    if (problems.length) throw new Error(`The ${type} source does not match the source contract: ${problems.join('; ')}`);
+    sources.set(id, source);
   }
   return sources;
 }
+
+// What the server needs from a source (the shape at the top of this file). Returns
+// every way `source` falls short, so an author sees them all at once. Only the
+// presence and kind of each member is checked, not what it does.
+const MEMBERS = {
+  auth: ['loadSession', 'requireAuth', 'getSessionId', 'getSessionUser', 'getSessionProfileId', 'getSessionAccountId', 'getSessionAccountKey', 'clearSession', 'signOutEverywhere'],
+  watchState: ['reportProgress', 'markWatched', 'markUnwatched'],
+  playback: ['start', 'proxy', 'stop', 'directCapable', 'mediaOrigin'],
+};
+export const LIBRARY_METHODS = ['libraries', 'libraryItems', 'recentlyAdded', 'showSeasons', 'showEpisodes', 'seasonEpisodes', 'itemDetails', 'search', 'continueWatching'];
+
+export function sourceProblems(source, { id, type } = {}) {
+  const problems = [];
+  if (!source || typeof source !== 'object') return ['the factory must return an object'];
+  if (id !== undefined && source.id !== id) problems.push(`id must be "${id}"`);
+  if (type !== undefined && source.type !== type) problems.push(`type must be "${type}"`);
+  if (typeof source.name !== 'string' || !source.name.trim()) problems.push('name must be a non-empty string');
+  for (const name of ['isValidId', 'registerRoutes', 'library', 'sendThumbnail']) {
+    if (typeof source[name] !== 'function') problems.push(`${name} must be a function`);
+  }
+  for (const [group, names] of Object.entries(MEMBERS)) {
+    if (!source[group] || typeof source[group] !== 'object') { problems.push(`${group} must be an object`); continue; }
+    for (const name of names) if (typeof source[group][name] !== 'function') problems.push(`${group}.${name} must be a function`);
+  }
+  const page = source.signInOptions?.signInPage;
+  if (page !== undefined && !SIGN_IN_PAGE.test(page)) problems.push('signInOptions.signInPage must be a path on this site, such as /my-source/sign-in');
+  return problems;
+}
+
+// A same-site path for a source's own sign-in page; the login page links to it.
+export const SIGN_IN_PAGE = /^\/(?!\/)[A-Za-z0-9\-._~\/]{0,200}$/;

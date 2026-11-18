@@ -8,6 +8,7 @@ import { QUALITY_TIERS, QUALITY_LEVELS, normalizeQuality, qualityTiers } from '.
 import { parseCookies, safeError } from './security.js';
 import { createCookieSealer, packSession, unpackSession, SESSION_COOKIE_NAME } from './session-cookie.js';
 import { adminSpec, adminConfigured } from './admin-auth.js';
+import { describeTrack, orderTracks, toWebVtt, TRACK_ID, SUBTITLE_TEXT_LIMIT } from './subtitles.js';
 
 const LOGIN_COOKIE_NAME = 'freeStuffCrazyPlayerJellyfinLogin';
 const LOGIN_TTL_MS = 10 * 60 * 1000;
@@ -541,6 +542,16 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
       .map(view => ({ id: view.Id, title: view.Name, type: view.CollectionType === 'movies' ? 'movie' : 'show' }));
   }
 
+  // An item's subtitle streams and the media source they belong to.
+  async function subtitleStreams(credential, itemId) {
+    const item = await api(`/Items/${itemId}?${userQuery(credential)}`, { credential });
+    const source = item?.MediaSources?.[0];
+    return {
+      sourceId: String(source?.Id || ''),
+      streams: (source?.MediaStreams || []).filter(stream => stream.Type === 'Subtitle' && Number.isInteger(stream.Index) && TRACK_ID.test(String(stream.Index))),
+    };
+  }
+
   function library(req) {
     const credential = credentialFor(req);
     const items = query => api(`/Items?${userQuery(credential, query)}`, { credential });
@@ -601,6 +612,29 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
           videoCodec: video?.Codec,
           resolution: video ? `${video.Width}x${video.Height}` : null,
         };
+      },
+      // The item's subtitle streams: ones Jellyfin can convert to text are `text`, the
+      // rest (picture subtitles such as PGS) can only be drawn into the video.
+      async subtitleTracks(itemId) {
+        return orderTracks((await subtitleStreams(credential, itemId)).streams.map(stream => describeTrack({
+          id: stream.Index,
+          label: stream.DisplayTitle || stream.Title || stream.Language,
+          language: stream.Language,
+          kind: stream.IsTextSubtitleStream ? 'text' : 'burn',
+          forced: stream.IsForced,
+          isDefault: stream.IsDefault,
+        })));
+      },
+      // One of those text tracks as WebVTT, converted by Jellyfin.
+      async subtitleText(itemId, trackId) {
+        const { streams, sourceId } = await subtitleStreams(credential, itemId);
+        const stream = streams.find(candidate => String(candidate.Index) === String(trackId));
+        if (!stream?.IsTextSubtitleStream || !ID.test(sourceId)) return null;
+        const response = await request(`/Videos/${itemId}/${sourceId}/Subtitles/${Number(stream.Index)}/0/Stream.vtt`, { credential, timeoutMs: 15000 });
+        if (!response.ok) { await response.body?.cancel(); throw new Error(`Jellyfin subtitle ${response.status}`); }
+        const text = await response.text();
+        if (text.length > SUBTITLE_TEXT_LIMIT) throw new Error('Subtitle file too large');
+        return toWebVtt(text);
       },
       async search(query) {
         const data = await items({ searchTerm: query, Recursive: 'true', IncludeItemTypes: 'Movie,Series,Episode', Limit: '30', Fields: ITEM_FIELDS });
@@ -723,9 +757,12 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
     const tier = { ...qualityTiers(config.plex.videoBitrate)[quality] };
     if (capKbps) tier.videoBitrate = Math.max(300, Math.min(tier.videoBitrate, capKbps - AUDIO_BITRATE / 1000));
     const videoBitrate = tier.videoBitrate * 1000;
+    // A chosen subtitle track is drawn into the picture; with none chosen nothing is.
+    const subtitle = typeof req.query.subtitle === 'string' && TRACK_ID.test(req.query.subtitle) ? req.query.subtitle : null;
     const params = userQuery(credential, {
       maxStreamingBitrate: String(videoBitrate + AUDIO_BITRATE), enableDirectPlay: 'false', enableDirectStream: 'false',
       enableTranscoding: 'true', autoOpenLiveStream: 'false', mediaSourceId: itemId, startTimeTicks: '0',
+      ...(subtitle ? { subtitleStreamIndex: subtitle } : {}),
     });
     const info = await api(`/Items/${itemId}/PlaybackInfo?${params}`, {
       credential, method: 'POST', timeoutMs: 15000,
@@ -749,9 +786,15 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
     master.searchParams.set('DeviceId', credential.deviceId);
     master.searchParams.set('VideoBitrate', String(videoBitrate));
     master.searchParams.set('AudioBitrate', String(AUDIO_BITRATE));
-    // Like Plex, no burned-in subtitles: they cost a lot of transcoding.
-    master.searchParams.set('SubtitleStreamIndex', '-1');
-    master.searchParams.delete('SubtitleMethod');
+    // Subtitles are only drawn into the picture when the viewer chose a track that
+    // can't be shown as text, because that costs transcoding.
+    if (subtitle) {
+      master.searchParams.set('SubtitleStreamIndex', subtitle);
+      master.searchParams.set('SubtitleMethod', 'Encode');
+    } else {
+      master.searchParams.set('SubtitleStreamIndex', '-1');
+      master.searchParams.delete('SubtitleMethod');
+    }
 
     const active = { source: id, sessionId: playSessionId, itemId, accessToken: credential.accessToken, deviceId: credential.deviceId, serverUrl: credential.serverUrl };
     state.active = active;

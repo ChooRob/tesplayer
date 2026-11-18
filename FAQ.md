@@ -23,6 +23,12 @@ These are observations, not guarantees, and how well the car connects depends on
 
 You can use the [hosted player](README.md#try-the-hosted-player-before-you-self-host) without running the player yourself. It still needs a way to reach your media server: Plex Remote Access, a public HTTPS Jellyfin address, or the Jellyfin connector plugin. The README explains each option and the hosted watch-time allowance.
 
+## How do I turn on captions?
+
+Tap the **CC** button in the player bar, then choose a language or **Off**. The button only appears when the video has subtitles. Your choice is remembered on this device and used for the next video that has that language.
+
+Most subtitles are shown by the player and switch on at once. Some (picture-based subtitles, and on Plex most subtitles stored inside the video file) can only be drawn into the picture by your media server, so they are marked "restarts video": choosing one restarts the stream at the same spot, and the server does a little more work.
+
 ## The video plays in a Tesla, but there is no sound
 
 Open the car's **Camera** app, then return to the browser. This has restored sound when the player appeared to be running normally. If it persists, try reopening the browser. You can also try the **Restart sound** in playback settings.

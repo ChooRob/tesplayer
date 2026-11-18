@@ -6,7 +6,7 @@ comma-separated list of module paths. A missing directory or a plugin that
 fails to import stops startup, so access rules supplied by plugins cannot
 silently disappear.
 
-A plugin's default export is an object with any subset of these hooks:
+A plugin's default export is an object with any subset of these hooks (`sources` is covered in its own section below):
 
 ```js
 export default {
@@ -20,6 +20,7 @@ export default {
   getQuotaStatus(accountKey) { /* { remainingSeconds, resetAt, breakdown?: [{ label, seconds }] } | null */ },
   recordUsage(accountKey, secondsElapsed) { /* usage accounting */ },
   getStreamLimit(accountKey) { /* max concurrent streams, or null for unlimited */ },
+  sources: { 'my-server': { configure(env) {}, create(args) {} } }, // a new kind of media server; see "Writing a source"
   createStore({ dataDir }) { /* storage backend; default is JSON files in dataDir */ },
 };
 ```
@@ -47,9 +48,127 @@ ignored):
   now. Watch time is only counted when a plugin supplies account keys.
 
 An admin-only page is a tab on the Admin page: `context.admin.registerTab({ id,
-label, file })` takes the absolute path of a browser module that exports
-`mount(container)`. Serve its data under `/api/admin/<plugin-id>/`, which core
+label, file, order })` takes the absolute path of a browser module that exports
+`mount(container)`. Tabs appear in plugin load order; a lower optional `order` (default 0) moves a tab earlier. Serve its data under `/api/admin/<plugin-id>/`, which core
 only answers for the signed-in admin with an unlocked (passkey) session.
 
 To add a browse tab, import `registerTab` from `/tab-registry.js` in a
 frontend script and provide an ID, label, and `onOpen`/`onClose` callbacks.
+
+## Writing a source
+
+A source is a media backend: Plex and Jellyfin are two. A plugin can add a third
+(Emby, a folder of files, anything that can list items and produce a stream). The
+player pages need no changes; they talk to core, and core talks to the source.
+
+```js
+// my-server-plugin.js
+export default {
+  sources: {
+    'my-server': {
+      // Is this install using it? Return null for no, an options object for yes
+      // (`{}` is fine), or throw an Error to show a setup problem on the login
+      // page. Name the setting at fault, never its value: the message is public.
+      configure(env, { plugins }) { // plugins: every loaded plugin, if yours depends on a hook of theirs
+        if (!env.MY_SERVER_URL) return null;
+        if (!/^https?:\/\//.test(env.MY_SERVER_URL)) throw new Error('MY_SERVER_URL must be the server\'s http(s) address.');
+        return { url: env.MY_SERVER_URL };
+      },
+      // Optional: lines to log at startup, for example a setting that is no longer used.
+      warnings: env => [],
+      // Called once at startup with { id, config, plugins, store, pipeUpstream,
+      // signedIn, options }. `id` is the type ('my-server'). `options` is what
+      // configure returned. `store` is the same store plugins use.
+      async create({ id, store, pipeUpstream, signedIn, options }) { return { /* the shape below */ }; },
+    },
+  },
+};
+```
+
+Plex and Jellyfin are sources in exactly this form. They ship in the source
+(`bundled-sources.js` holds their `configure` and `warnings`) and are always loaded,
+ahead of any plugin, so what you write here is the same interface they use; their
+code (`plex-source.js`, `jellyfin-source.js`) is the reference.
+
+The type is lowercase letters, digits and dashes (up to 32), and cannot be `plex`
+or `jellyfin` or another plugin's. A source that is not configured is simply not
+created. When it is, core checks the object `create` returns and refuses to start
+if anything is missing, naming every problem at once (`sourceProblems` in
+`sources.js`). That check looks at presence only; the rest is on you.
+
+### What `create` returns
+
+| Member | What it is |
+| --- | --- |
+| `id`, `type`, `name` | `id` and `type` as given; `name` is shown to viewers. |
+| `isValidId(id)` | True for an item or library ID in your format. Core calls it before every route that takes one, so IDs reaching your code are already checked. Make it strict. |
+| `signInOptions` | `{ signInPage: '/my-server/sign-in', signInLabel: 'Sign in to My Server' }`. The login page shows a link to this path on your own site. Required for people to be able to sign in. |
+| `registerRoutes(app, { rateLimit, endPlayback })` | Add your routes: the sign-in page, its API, anything else. Core's sign-in checks apply to everything except paths `auth.isPublicPath` returns true for, so make the sign-in routes public there. |
+| `auth` | The signed-in session, below. |
+| `library(req)` | Returns an object of read methods for this viewer, below. |
+| `sendThumbnail(req, res)` | Serves `GET /api/library/thumb`, whose query is whatever your items' `thumbnail` URLs put there. Restrict what it will fetch: it is a proxy. |
+| `watchState` | `reportProgress(req, { itemId, timeMs, state, durationMs })`, `markWatched(req, itemId)`, `markUnwatched(req, itemId)`, and optionally `watchedFraction(req)` (default 0.9: how far in counts as watched). |
+| `playback` | Streaming, below. |
+| `accounts` (optional) | `search(query)`, `describe(key)`, `list()`: how admin pages find accounts. Each returns `{ key, label, detail? }`; `describe` returns null for a key that is not yours. |
+
+**`auth`** keeps one signed-in session per cookie. Required: `loadSession(req, res, next)`
+(runs first on every request), `requireAuth(req, res, next)`, `getSessionId(req)`
+(a string, or null when this request is not signed in to you; it is how core knows
+which source a request belongs to, so it must never claim another source's request),
+`getSessionUser(req)` (`{ title, thumb }` or null), `getSessionProfileId(req)`,
+`getSessionAccountId(req)`, `getSessionAccountKey(req)`, `clearSession(req, res)`,
+`signOutEverywhere(req, res)`. Optional: `isPublicPath(path)`, `getSessionCredential(req)`,
+`getSessionServer(req)`, `getAdminIdentity(req)`. Use `session-cookie.js`'s
+`createCookieSealer` to keep the credential in a sealed cookie, not on the server;
+that is what Plex and Jellyfin do. The account key is what limits and statistics
+group a person by, in the form `<type>:<something stable>`.
+
+**`library(req)`** returns these async methods. Items use Plex's field names, which
+the pages read:
+
+- `libraries()` → `[{ id, title, type: 'movie' | 'show' }]`
+- `libraryItems(libraryId, { sort })` → `{ total, items }`; `recentlyAdded(libraryId)`;
+  `search(query)`; `continueWatching()`
+- `showSeasons(showId)`, `showEpisodes(showId)`, `seasonEpisodes(seasonId)`
+- `itemDetails(itemId)` → one item with `summary`, `genres`, `year`, and for episodes
+  `season`, `episode` and `grandparentKey` (the show's ID, or a path ending in it) so
+  Play Next can find the next one. The page resumes by seeking within the stream, so the
+  playlist always covers the whole item
+- An item has `ratingKey` (your ID, as a string), `type` (`movie`, `show`, `season`,
+  `episode`), `title`, `thumbnail` (a `/api/library/thumb?...` URL), `durationMs`,
+  `viewOffset` (resume point in ms), and for shows `leafCount` and `viewedLeafCount`.
+- Optional: `subtitleTracks(itemId)` and `subtitleText(itemId, trackId)`; see
+  `subtitles.js` for the track format. Without them there are no captions.
+- To fail with something a viewer should read, throw an Error with a `userMessage`
+  string. Add `serverGone: true` when the session can no longer work (it is ended and
+  the page offers to sign in again).
+
+**`playback`** is the heavy part. The player plays HLS through core's `/proxy/`:
+
+- `start(req, res, { itemId, state, stopState })` handles `GET /api/start`. Set
+  `state.active` to an object that includes `{ source: <your id>, sessionId, itemId }`
+  plus whatever you need to stop it later, then answer with an HLS playlist
+  (`application/vnd.apple.mpegurl`) whose every segment and key URL is rewritten to
+  `/proxy/<path>?<query>`. The media server's own address and credentials must never
+  reach the browser. Honor `req.query.quality` (`ultra`, `high`, `medium`, `low`; see
+  `quality-tiers.js`) and, for captions burned into the picture,
+  `req.query.subtitle` (a track ID from `subtitleTracks` whose `kind` is `burn`).
+  Throw to fail; core cleans up.
+- `proxy(req, res, { ownsSession })` serves `/proxy/*`. Before fetching anything,
+  require `ownsSession(sessionId)` to be true for the stream's session ID and that the
+  path is one you generated, so one viewer cannot read another's stream or turn the
+  proxy into a general fetcher.
+- `stop(active)` ends the stream upstream, given the object you put in `state.active`.
+- `directCapable(req)` and `mediaOrigin(req)` let the browser fetch media straight
+  from the server when it can; return `false` and `''` to always go through the proxy.
+
+### Checking your work
+
+- Start the server: a source that does not meet the contract stops startup with a
+  list of what is missing. `sourceProblems(source)` is exported from `sources.js` for
+  your own tests, as is `LIBRARY_METHODS`; `test/source-plugins.test.js` has a minimal
+  source that passes.
+- The shipped sources are the reference: `plex-source.js` and `jellyfin-source.js`.
+  Jellyfin is the closer model for a server with its own API and token sign-in.
+- Plugin code is trusted, so nothing here sandboxes you, but treat everything from
+  the browser and from your media server as untrusted when building URLs and paths.

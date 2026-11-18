@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>FreeStuffCrazy Player — sign in</title>
   <style>
@@ -30,6 +31,7 @@
     .signIn + .signIn { margin-top: 12px; }
     /* Jellyfin's brand gradient, purple to blue. */
     .signIn.jellyfin { background: #aa5cc3 linear-gradient(90deg, #aa5cc3, #00a4dc); color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); }
+    a.signIn.other { display: block; text-align: center; text-decoration: none; margin-top: 12px; }
     .signIn:disabled { opacity: 0.6; cursor: default; }
     #jellyfinStep p { margin: 12px 0; }
     .jellyfinForm { display: grid; gap: 12px; text-align: left; }
@@ -119,6 +121,7 @@
       <p id="signInIntro">Sign in with the Plex account that has access to this server.</p>
       <button id="signInBtn" class="signIn">Sign in with Plex</button>
       <button id="jellyfinBtn" class="signIn jellyfin" hidden>Sign in with Jellyfin</button>
+      <div id="otherSources"></div>
     </div>
     <div id="jellyfinStep" hidden>
       <form id="jellyfinServerForm" class="jellyfinForm" hidden>
@@ -261,8 +264,20 @@
         if (prompt?.placeholder) document.getElementById('jellyfinServer').placeholder = prompt.placeholder;
         signInBtn.hidden = !types.has('plex');
         jellyfinBtn.hidden = !types.has('jellyfin');
-        signInIntro.textContent = types.size > 1 ? 'Sign in with Plex or Jellyfin.'
+        // A source a plugin adds brings its own sign-in page (signInPage, a path on this site).
+        const others = sources.filter((source) => source.type !== 'plex' && source.type !== 'jellyfin'
+          && typeof source.signInPage === 'string' && /^\/(?!\/)[A-Za-z0-9\-._~\/]{0,200}$/.test(source.signInPage));
+        document.getElementById('otherSources').replaceChildren(...others.map((source) => {
+          const link = document.createElement('a');
+          link.className = 'signIn other';
+          link.href = source.signInPage;
+          link.textContent = String(source.signInLabel || `Sign in with ${source.name}`).slice(0, 80);
+          return link;
+        }));
+        const named = [...(types.has('plex') ? ['Plex'] : []), ...(types.has('jellyfin') ? ['Jellyfin'] : []), ...others.map((source) => String(source.name).slice(0, 40))];
+        signInIntro.textContent = named.length > 1 ? `Sign in with ${named.slice(0, -1).join(', ')} or ${named.at(-1)}.`
           : types.has('jellyfin') ? 'Sign in with your Jellyfin account.'
+          : others.length ? `Sign in with ${named[0]}.`
           : 'Sign in with the Plex account that has access to this server.';
         if (suggestedServer && jellyfinAsksServer && types.has('jellyfin')) jellyfinBtn.click();
       })

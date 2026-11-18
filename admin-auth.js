@@ -64,12 +64,12 @@ export function registerAdmin(app, { identityFor, rateLimit, store, appOrigin, e
 
   // False when the admin area isn't configured or the ID is taken; plugins
   // then skip their admin routes.
-  function registerTab({ id, label, file }) {
+  function registerTab({ id, label, file, order = 0 }) {
     if (!enabled) return false;
     if (typeof id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(id)
       || typeof label !== 'string' || !label.trim() || typeof file !== 'string'
       || !path.isAbsolute(file) || tabs.has(id)) return false;
-    tabs.set(id, { id, label, file });
+    tabs.set(id, { id, label, file, order: Number.isFinite(order) ? order : 0 });
     return true;
   }
 
@@ -218,7 +218,7 @@ export function registerAdmin(app, { identityFor, rateLimit, store, appOrigin, e
 
   app.use('/api/admin', requireUnlock);
   app.get('/api/admin/tabs', (_req, res) => {
-    res.json({ tabs: [...tabs.values()].map(({ id, label }) => ({ id, label })) });
+    res.json({ tabs: [...tabs.values()].sort((a, b) => a.order - b.order).map(({ id, label }) => ({ id, label })) });
   });
   app.get('/api/admin/tabs/:tabId.js', (req, res) => {
     const tab = tabs.get(req.params.tabId);
