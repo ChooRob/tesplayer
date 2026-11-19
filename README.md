@@ -6,7 +6,7 @@ The FreeStuffCrazy Player is open source and can be self hosted.
 
 ## Try the hosted player before you self host
 
-Open **<https://player.freestuffcrazy.com>**, choose Plex, Jellyfin or Emby, and sign in. Nothing is installed in the car, and your media stays on your server. Each account gets **60 minutes of watch time a week**, resetting Monday at 00:00 UTC. That time comes from extra server capacity at [FreeStuffCrazy.com](https://freestuffcrazy.com) and is subject to change without notice. A Tesla's cellular connection can be slow; tethering to your phone has worked better for us ([FAQ](FAQ.md#video-is-slow-or-keeps-buffering-in-a-tesla)).
+Open **<https://player.freestuffcrazy.com>**, choose Plex, Jellyfin or Emby, and sign in. Nothing is installed in the car, and your media stays on your server. The hosted version comes from extra server capacity at [FreeStuffCrazy.com](https://freestuffcrazy.com) and is subject to change without notice. A Tesla's cellular connection can be slow; tethering to your phone has worked better for us ([FAQ](FAQ.md#video-is-slow-or-keeps-buffering-in-a-tesla)).
 
 - **Plex:** Sign in with the code or QR code. The account can own the server, have it shared, or be a Home profile. Turn on **Remote Access** in Plex so the hosted player can reach it; Plex's relay limits video quality.
 - **Jellyfin with a public HTTPS address:** Enter it (such as `https://jellyfin.example.com`), then sign in with Quick Connect or your username and password. Plain HTTP and private addresses are refused.
