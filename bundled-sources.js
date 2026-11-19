@@ -5,6 +5,7 @@
 
 import { createPlexSource } from './plex-source.js';
 import { createJellyfinSource, parseJellyfinUrl, tenantServersOf } from './jellyfin-source.js';
+import { createEmbySource, parseEmbyUrl, embyServersOf } from './emby-source.js';
 import { plexEmail } from './admin-auth.js';
 import { firstPluginWith } from './plugins.js';
 
@@ -35,6 +36,18 @@ export const bundledSources = {
         return tenantServersOf(plugins) ? {} : null;
       },
       create: createJellyfinSource,
+    },
+    // One Emby server, named by EMBY_URL, and/or users' own servers through an embyServers
+    // plugin. Sign-in is its own page, linked from the login page.
+    emby: {
+      configure(env, { plugins }) {
+        if (env.EMBY_URL) {
+          parseEmbyUrl(env.EMBY_URL); // throws a message naming EMBY_URL, never its value
+          return {};
+        }
+        return embyServersOf(plugins) ? {} : null;
+      },
+      create: createEmbySource,
     },
   },
 };

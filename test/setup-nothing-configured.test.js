@@ -11,7 +11,7 @@ import { Socket } from 'node:net';
 const temporary = mkdtempSync(path.join(tmpdir(), 'tesladash-setup-test-'));
 Object.assign(process.env, {
   DATA_DIR: temporary, NODE_ENV: 'development', SESSION_SECRET: 'test-only-secret-with-at-least-32-characters',
-  PLEX_URL: '', JELLYFIN_URL: 'https://admin:hunter2@jellyfin.example.com', JELLYFIN_NAME: '',
+  PLEX_URL: '', EMBY_URL: '', JELLYFIN_URL: 'https://admin:hunter2@jellyfin.example.com', JELLYFIN_NAME: '',
   APP_ORIGIN: 'https://dash.example', TRUST_PROXY: '', FREESTUFFCRAZY_PLUGINS_DIR: '', FREESTUFFCRAZY_PLUGIN_MODULES: '', FREESTUFFCRAZY_ADMIN: '',
 });
 const originalFetch = globalThis.fetch;

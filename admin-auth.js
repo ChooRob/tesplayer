@@ -32,7 +32,7 @@ export function plexEmail(env = process.env) {
 // default the PLEX_EMAIL account or the Jellyfin server's administrators.
 export function adminConfigured(env = process.env) {
   return /^[0-9a-f]{64}$/i.test(env.FREESTUFFCRAZY_ADMIN_TOKEN_SHA256?.trim() ?? '')
-    && !!(adminSpec(env) || plexEmail(env) || env.JELLYFIN_URL?.trim());
+    && !!(adminSpec(env) || plexEmail(env) || env.JELLYFIN_URL?.trim() || env.EMBY_URL?.trim());
 }
 
 // identityFor(req) -> { id, name, sessionId } for an admin, else null. Each

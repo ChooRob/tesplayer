@@ -6,15 +6,16 @@ The FreeStuffCrazy Player is open source and can be self hosted.
 
 ## Try the hosted player before you self host
 
-Open **<https://player.freestuffcrazy.com>**, choose Plex or Jellyfin, and sign in. Nothing is installed in the car, and your media stays on your server. Each account gets **60 minutes of watch time a week**, resetting Monday at 00:00 UTC. That time comes from extra server capacity at [FreeStuffCrazy.com](https://freestuffcrazy.com) and is subject to change without notice. A Tesla's cellular connection can be slow; tethering to your phone has worked better for us ([FAQ](FAQ.md#video-is-slow-or-keeps-buffering-in-a-tesla)).
+Open **<https://player.freestuffcrazy.com>**, choose Plex, Jellyfin or Emby, and sign in. Nothing is installed in the car, and your media stays on your server. Each account gets **60 minutes of watch time a week**, resetting Monday at 00:00 UTC. That time comes from extra server capacity at [FreeStuffCrazy.com](https://freestuffcrazy.com) and is subject to change without notice. A Tesla's cellular connection can be slow; tethering to your phone has worked better for us ([FAQ](FAQ.md#video-is-slow-or-keeps-buffering-in-a-tesla)).
 
 - **Plex:** Sign in with the code or QR code. The account can own the server, have it shared, or be a Home profile. Turn on **Remote Access** in Plex so the hosted player can reach it; Plex's relay limits video quality.
 - **Jellyfin with a public HTTPS address:** Enter it (such as `https://jellyfin.example.com`), then sign in with Quick Connect or your username and password. Plain HTTP and private addresses are refused.
 - **Jellyfin without a public address:** Install the [FreeStuffCrazy Player Connector](https://github.com/FreeStuffCrazy/jellyfin-plugin-freestuffcrazy), restart Jellyfin, and link it from the plugin's page in the dashboard. Enter the server name shown there into the hosted player. No port forwarding is needed; streams are limited to about 2 Mbps.
+- **Emby with a public HTTPS address:** Enter it (such as `https://emby.example.com`), then sign in with your username and password. Plain HTTP and private addresses are refused. The connector plugin is for Jellyfin only.
 
 ## Run your own player
 
-You need Docker with Compose, a Plex or Jellyfin server the machine can reach, and an HTTPS address. The included setup runs the player with Caddy, which provides HTTPS.
+You need Docker with Compose, a Plex, Jellyfin or Emby server the machine can reach, and an HTTPS address. The included setup runs the player with Caddy, which provides HTTPS.
 
 1. Copy `.env.example` to `.env` and `config.example.json` to `config.json`.
 2. Edit `.env`: set `APP_ORIGIN` to your HTTPS address, replace `SESSION_SECRET=changeme` with a random secret, and add a media server: `PLEX_EMAIL` (the owner's email; the first sign-in links the server) or `JELLYFIN_URL`. See [.env.example](.env.example) for optional settings.

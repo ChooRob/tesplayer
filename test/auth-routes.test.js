@@ -12,7 +12,7 @@ const temporary = mkdtempSync(path.join(tmpdir(), 'tesladash-auth-test-'));
 Object.assign(process.env, {
   DATA_DIR: temporary, NODE_ENV: 'development', SESSION_SECRET: 'test-only-secret-with-at-least-32-characters',
   PLEX_URL: 'https://plex.example', PLEX_CLIENT_ID: 'test-client', PLEX_EMAIL: 'owner@example.test',
-  APP_ORIGIN: 'https://dash.example', TRUST_PROXY: '', FREESTUFFCRAZY_PLUGINS_DIR: '', JELLYFIN_URL: '', FREESTUFFCRAZY_ADMIN: '', FREESTUFFCRAZY_PLUGIN_MODULES: new URL('./fixtures/start-cap-plugin.js', import.meta.url).href,
+  APP_ORIGIN: 'https://dash.example', TRUST_PROXY: '', FREESTUFFCRAZY_PLUGINS_DIR: '', EMBY_URL: '', JELLYFIN_URL: '', FREESTUFFCRAZY_ADMIN: '', FREESTUFFCRAZY_PLUGIN_MODULES: new URL('./fixtures/start-cap-plugin.js', import.meta.url).href,
 });
 writeFileSync(path.join(temporary, '.sessions.json'), JSON.stringify({ legacy: { accountToken: 'old', title: 'untrusted', iat: Date.now() } }), { mode: 0o644 });
 const originalFetch = globalThis.fetch;

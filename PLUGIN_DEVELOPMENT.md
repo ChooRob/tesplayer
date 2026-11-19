@@ -21,6 +21,7 @@ export default {
   recordUsage(accountKey, secondsElapsed) { /* usage accounting */ },
   getStreamLimit(accountKey) { /* max concurrent streams, or null for unlimited */ },
   sources: { 'my-server': { configure(env) {}, create(args) {} } }, // a new kind of media server; see "Writing a source"
+  embyServers: { resolve(address) {}, fetch(url, init) {} }, // let users sign in to their own Emby server; see below
   createStore({ dataDir }) { /* storage backend; default is JSON files in dataDir */ },
 };
 ```
@@ -85,10 +86,12 @@ export default {
 };
 ```
 
-Plex and Jellyfin are sources in exactly this form. They ship in the source
+Plex, Jellyfin and Emby are sources in exactly this form. They ship in the source
 (`bundled-sources.js` holds their `configure` and `warnings`) and are always loaded,
 ahead of any plugin, so what you write here is the same interface they use; their
-code (`plex-source.js`, `jellyfin-source.js`) is the reference.
+code (`plex-source.js`, `jellyfin-source.js`, `emby-source.js`) is the reference. Emby is the
+smallest and the one with its own sign-in page (`public/emby-sign-in.html`, linked through
+`signInOptions.signInPage`), so it is the closest model for a plugin source.
 
 The type is lowercase letters, digits and dashes (up to 32), and cannot be `plex`
 or `jellyfin` or another plugin's. A source that is not configured is simply not
@@ -169,6 +172,18 @@ the pages read:
   your own tests, as is `LIBRARY_METHODS`; `test/source-plugins.test.js` has a minimal
   source that passes.
 - The shipped sources are the reference: `plex-source.js` and `jellyfin-source.js`.
-  Jellyfin is the closer model for a server with its own API and token sign-in.
+  `emby-source.js` is the closest model for a single server with its own API and password sign-in.
 - Plugin code is trusted, so nothing here sandboxes you, but treat everything from
   the browser and from your media server as untrusted when building URLs and paths.
+
+### Letting users bring their own server
+
+A plugin that exports `embyServers` lets people sign in to an Emby server they type, instead of
+(or as well as) the one in `EMBY_URL`. `resolve(address)` returns the server URL to use or throws an
+`Error` whose message is shown to the user; `fetch(url, init)` makes every request to such a server, so
+the plugin alone decides which addresses can be reached (an https-only, public-address-only guard is
+the usual choice, since the address comes from a user). Optional: `maxBitrate(url)` (a kbps cap),
+`displayAddress(url)` (what to type to sign in again) and `prompt` (`{ hint, label, placeholder }`
+for the question). A user's server is keyed by address as well as its ID, and never makes an
+admin. Without `EMBY_URL`, the plugin is what turns Emby on. Jellyfin has the same hook, named
+`jellyfinServers`.

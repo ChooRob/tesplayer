@@ -36,7 +36,7 @@ export default {
 Object.assign(globalThis, { __limitKeys: [], __sessions: [] });
 Object.assign(process.env, {
   DATA_DIR: temporary, NODE_ENV: 'development', SESSION_SECRET: SECRET,
-  PLEX_URL: '', JELLYFIN_URL: 'https://jf.example', JELLYFIN_NAME: 'Home Jellyfin',
+  PLEX_URL: '', EMBY_URL: '', JELLYFIN_URL: 'https://jf.example', JELLYFIN_NAME: 'Home Jellyfin',
   APP_ORIGIN: 'https://dash.example', TRUST_PROXY: '', FREESTUFFCRAZY_PLUGINS_DIR: '',
   FREESTUFFCRAZY_PLUGIN_MODULES: pathToFileURL(pluginPath).href,
   FREESTUFFCRAZY_ADMIN: `jellyfin:${USER}:Sam`,
