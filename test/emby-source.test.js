@@ -28,7 +28,8 @@ async function fakeEmby(input, init = {}) {
     if (call.body.Pw !== 'right') return new Response('', { status: 401 });
     return json({ AccessToken: TOKEN, ServerId: SERVER_ID, User: { Id: USER_ID, Name: 'Sam' } });
   }
-  if (url.pathname.startsWith('/Items/') && url.pathname.endsWith('/Images/Primary')) return new Response('png', { headers: { 'Content-Type': 'image/png' } });
+  if (url.pathname.startsWith('/Items/') && url.pathname.endsWith('/Images/Primary'))
+    return authorized ? new Response('png', { headers: { 'Content-Type': 'image/png' } }) : new Response('', { status: 401 });
   if (!authorized && !url.pathname.startsWith('/videos/')) return new Response('', { status: 401 });
   if (url.pathname === `/Users/${USER_ID}/Views`) return json({ Items: [{ Id: '3', Name: 'Movies', CollectionType: 'movies' }, { Id: '9', Name: 'Music', CollectionType: 'music' }] });
   if (url.pathname === `/Users/${USER_ID}/Items`) {
@@ -148,6 +149,7 @@ test('libraries and items are shaped like the other sources', async () => {
 
 test('thumbnails are fetched for valid image requests only', async () => {
   assert.equal((await send('/thumb?path=909%2FPrimary&width=300&height=450')).status, 200);
+  assert.equal(calls.findLast(call => call.path === '/Items/909/Images/Primary').headers['X-Emby-Token'], TOKEN);
   for (const bad of ['path=../x%2FPrimary', 'path=909%2FLogo', 'path=909%2FPrimary&width=9999']) assert.equal((await send(`/thumb?${bad}`)).status, 400, bad);
 });
 

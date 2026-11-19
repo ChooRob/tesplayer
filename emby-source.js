@@ -612,9 +612,13 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
     if (!ITEM_ID.test(itemId || '') || !IMAGE_TYPES.has(imageType)
       || ![width, height].every(value => Number.isInteger(value) && value >= 1 && value <= 2048)) return res.status(400).end();
     try {
-      const server = serverOf(credentialFor(req));
+      const credential = credentialFor(req);
+      const server = serverOf(credential);
       const params = new URLSearchParams({ maxWidth: String(width), maxHeight: String(height), quality: '85' });
-      const upstream = await server.fetch(`${server.url}/Items/${itemId}/Images/${imageType}?${params}`, { redirect: 'error', signal: AbortSignal.timeout(10000) });
+      const upstream = await server.fetch(`${server.url}/Items/${itemId}/Images/${imageType}?${params}`, {
+        headers: headers({ deviceId: credential.deviceId, token: credential.accessToken }),
+        redirect: 'error', signal: AbortSignal.timeout(10000),
+      });
       const type = upstream.headers.get('content-type')?.split(';')[0];
       if (!upstream.ok || !['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif'].includes(type)) {
         await upstream.body?.cancel();
@@ -682,9 +686,10 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
 
   // Emby needs the play session ID on every progress report, but the page only sends the
   // item. Remember the session each viewer's stream for an item was started with.
-  const plays = new Map(); // `${user ID}:${item ID}` -> { playSessionId, mediaSourceId }
-  function rememberPlay(credential, itemId, play) {
-    const key = `${credential.userId}:${itemId}`;
+  const plays = new Map(); // one entry per viewer session, server, user and item
+  const playKey = (req, credential, itemId) => JSON.stringify([getSession(req)?.sessionId, accountKeyOf(credential), credential.userId, itemId]);
+  function rememberPlay(req, credential, itemId, play) {
+    const key = playKey(req, credential, itemId);
     plays.delete(key);
     plays.set(key, play);
     if (plays.size > 500) plays.delete(plays.keys().next().value);
@@ -699,6 +704,7 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
     const asked = QUALITY_LEVELS.includes(req.query.quality) ? req.query.quality : 'high';
     const quality = capKbps && asked === 'ultra' ? 'high' : normalizeQuality(asked);
     const tier = { ...qualityTiers(config.plex.videoBitrate)[quality] };
+    if (capKbps && capKbps < 300 + AUDIO_BITRATE / 1000) throw new Error('Emby server bitrate cap is too low for playback');
     if (capKbps) tier.videoBitrate = Math.max(300, Math.min(tier.videoBitrate, capKbps - AUDIO_BITRATE / 1000));
     const videoBitrate = tier.videoBitrate * 1000;
     // A chosen subtitle track is drawn into the picture; with none chosen nothing is.
@@ -740,7 +746,7 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
     }
 
     state.active = { source: id, sessionId: playSessionId, itemId, accessToken: credential.accessToken, deviceId: credential.deviceId, serverUrl: credential.serverUrl };
-    rememberPlay(credential, itemId, { playSessionId, mediaSourceId: String(source.Id || '') });
+    rememberPlay(req, credential, itemId, { playSessionId, mediaSourceId: String(source.Id || '') });
     // Shows up as "now playing" in Emby; progress reports follow from the player.
     request('/Sessions/Playing', { credential, method: 'POST', body: { ItemId: itemId, MediaSourceId: source.Id, PlaySessionId: playSessionId, PlayMethod: 'Transcode', CanSeek: true } })
       .then(response => response.body?.cancel(), () => {});
@@ -813,7 +819,7 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
   async function reportProgress(req, { itemId, timeMs, state }) {
     const credential = credentialFor(req);
     // After a restart there is no remembered session; Emby accepts any ID, as long as there is one.
-    const play = plays.get(`${credential.userId}:${itemId}`) ?? { playSessionId: crypto.randomBytes(16).toString('hex'), mediaSourceId: '' };
+    const play = plays.get(playKey(req, credential, itemId)) ?? { playSessionId: crypto.randomBytes(16).toString('hex'), mediaSourceId: '' };
     const body = {
       ItemId: itemId, PositionTicks: Math.floor(timeMs) * TICKS_PER_MS, PlayMethod: 'Transcode', PlaySessionId: play.playSessionId,
       ...(play.mediaSourceId ? { MediaSourceId: play.mediaSourceId } : {}),
