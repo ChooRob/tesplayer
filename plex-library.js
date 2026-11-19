@@ -2,6 +2,7 @@
 // trimmed: no disk cache for thumbnails, no retry wrapper.
 
 import { plexDeviceHeaders } from './plex-connection.js';
+import { describeTrack, orderTracks, toWebVtt, readSubtitleText, TEXT_FORMATS, TRACK_ID } from './subtitles.js';
 
 const THUMBNAIL_PRESETS = {
   landscape: { width: 600, height: 338 },
@@ -153,6 +154,38 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
     };
   }
 
+  // An item's subtitle streams. One Plex can hand over as a text file (an external
+  // SubRip file) is `text`; the rest, including every one inside the video file, can
+  // only be drawn into the picture by the transcoder, so they are `burn`.
+  async function subtitleStreams(id) {
+    const data = await plexApi(`/library/metadata/${encodeURIComponent(id)}`);
+    const part = data.MediaContainer.Metadata?.[0]?.Media?.[0]?.Part?.[0];
+    return (part?.Stream || []).filter(stream => stream.streamType === 3 && TRACK_ID.test(String(stream.id)));
+  }
+
+  async function subtitleTracks(id) {
+    return orderTracks((await subtitleStreams(id)).map(stream => describeTrack({
+      id: stream.id,
+      label: stream.displayTitle || stream.extendedDisplayTitle || stream.language,
+      language: stream.languageCode || stream.languageTag,
+      kind: typeof stream.key === 'string' && stream.key.startsWith('/library/streams/') && TEXT_FORMATS.has(String(stream.codec || stream.format).toLowerCase()) ? 'text' : 'burn',
+      forced: stream.forced === true || stream.forced === 1,
+      isDefault: stream.default === true || stream.default === 1,
+    })));
+  }
+
+  // A text track as WebVTT. Only one of this item's own streams can be asked for.
+  async function subtitleText(id, trackId) {
+    const stream = (await subtitleStreams(id)).find(candidate => String(candidate.id) === String(trackId));
+    if (!stream || typeof stream.key !== 'string' || !stream.key.startsWith('/library/streams/')
+      || !TEXT_FORMATS.has(String(stream.codec || stream.format).toLowerCase())) return null;
+    const headers = { 'X-Plex-Token': token, ...plexDeviceHeaders(productName) };
+    if (clientId) headers['X-Plex-Client-Identifier'] = clientId;
+    const res = await fetch(`${plexUrl}${stream.key}`, { headers, redirect: 'error', signal: AbortSignal.timeout(10000) });
+    if (!res.ok) { await res.body?.cancel(); throw new Error(`Plex subtitle ${res.status}`); }
+    return toWebVtt(await readSubtitleText(res));
+  }
+
   // Normalize section hubs, including seasons mixed into Recently Added.
   function mapHubItem(m) {
     const isEpisode = m.type === 'episode';
@@ -299,6 +332,7 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
   }
 
   return {
+    subtitleTracks, subtitleText,
     libraries, libraryItems, showEpisodes, showSeasons, seasonEpisodes, itemDetails, hubContinueWatching, recentlyAdded, search, thumbnailUpstreamUrl,
     accounts, historyForAccount, continueWatchingForAccount,
   };

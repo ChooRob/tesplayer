@@ -19,6 +19,7 @@ import { registerAdmin } from './admin-auth.js';
 import { firstPluginWith, loadConfiguredPlugins } from './plugins.js';
 import { checkSourceConfig, createSources } from './sources.js';
 import { createAccountDirectory } from './accounts.js';
+import { TRACK_ID } from './subtitles.js';
 import { createPublicAccountIds } from './account-ids.js';
 
 const ITEM_KEY = process.env.ITEM_KEY;
@@ -74,7 +75,7 @@ const sessionSourceFor = req => sourceList.find(source => source.auth.getSession
 const recentlyMarked = createRecentlyMarked();
 const sourceFor = req => sessionSourceFor(req) || defaultSource;
 // Pages and endpoints anyone may load, signed in or not.
-const PUBLIC_PATHS = new Set(['/login', '/login.html', '/safe-navigation.js', '/icons.js', '/api/auth/sources', '/api/auth/setup']);
+const PUBLIC_PATHS = new Set(['/login', '/login.html', '/safe-navigation.js', '/icons.js', '/favicon.svg', '/api/auth/sources', '/api/auth/setup']);
 // Plugins may list pages and APIs of their own that work without signing in
 // (`publicPaths`, exact paths). They must not expose anything account-specific.
 const pluginPublicPaths = new Set(plugins.flatMap(plugin => (Array.isArray(plugin.publicPaths) ? plugin.publicPaths : [])
@@ -549,6 +550,21 @@ library.get('/show/:id/episodes', libraryRoute((lib, req) => lib.showEpisodes(re
 library.get('/show/:id/seasons', libraryRoute((lib, req) => lib.showSeasons(req.params.id)));
 library.get('/season/:id/episodes', libraryRoute((lib, req) => lib.seasonEpisodes(req.params.id)));
 library.get('/item/:id', libraryRoute((lib, req) => lib.itemDetails(req.params.id)));
+// Captions: the item's subtitle tracks, and one text track as WebVTT. A backend
+// without subtitle support just lists none.
+library.get('/subtitles/:id', libraryRoute(async (lib, req) => ({ tracks: typeof lib.subtitleTracks === 'function' ? await lib.subtitleTracks(req.params.id) : [] })));
+library.get('/subtitle/:id/:track', async (req, res) => {
+  if (!TRACK_ID.test(req.params.track)) return res.status(400).json({ error: 'Invalid track' });
+  try {
+    const lib = sourceFor(req).library(req);
+    const text = typeof lib.subtitleText === 'function' ? await lib.subtitleText(req.params.id, req.params.track) : null;
+    if (text == null) return res.status(404).json({ error: 'No such subtitle track' });
+    res.set({ 'Content-Type': 'text/vtt; charset=utf-8', 'Cache-Control': 'private, max-age=600', 'X-Content-Type-Options': 'nosniff' });
+    res.send(text);
+  } catch (err) {
+    res.status(502).json({ error: safeError(err) });
+  }
+});
 library.get('/ondeck', libraryRoute(lib => lib.continueWatching()));
 // The episode after this one, and how far in the item counts as watched -- the
 // player offers Play Next from that point and moves on by itself at the end.

@@ -13,6 +13,7 @@ import { createPlexLibrary } from './plex-library.js';
 import { createPlexAuth } from './plex-auth.js';
 import { plexDeviceHeaders } from './plex-connection.js';
 import { createOwnerLink } from './plex-owner-link.js';
+import { TRACK_ID } from './subtitles.js';
 import * as localProgress from './local-progress.js';
 import { adminConfigured, adminSpec, plexEmail } from './admin-auth.js';
 import { firstPluginWith } from './plugins.js';
@@ -194,10 +195,12 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
     return typeof value === 'string' && QUALITY_LEVELS.includes(value) ? value : 'high';
   }
 
-  function plexTranscodeParams(path, session, quality = 'high') {
+  function plexTranscodeParams(path, session, quality = 'high', subtitle = null) {
     quality = normalizeQuality(quality);
     const tier = qualityTiers(config.plex.videoBitrate)[quality];
     return new URLSearchParams({
+      // A chosen subtitle track is drawn into the picture by the transcoder.
+      ...(subtitle ? { subtitles: 'burn', subtitleStreamID: subtitle } : {}),
       hasMDE: '1',
       path,
       mediaIndex: '0',
@@ -229,7 +232,8 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
     const token = tokenForRequest(req);
     const plexUrl = urlForRequest(req);
     const sessionId = crypto.randomUUID();
-    const params = plexTranscodeParams(`/library/metadata/${itemId}`, sessionId, qualityTierFor(req.query.quality));
+    const subtitle = typeof req.query.subtitle === 'string' && TRACK_ID.test(req.query.subtitle) ? req.query.subtitle : null;
+    const params = plexTranscodeParams(`/library/metadata/${itemId}`, sessionId, qualityTierFor(req.query.quality), subtitle);
 
     const decisionRes = await fetch(`${plexUrl}/video/:/transcode/universal/decision?${params}`, {
       headers: { ...plexHeaders(token), Accept: 'application/json' },
@@ -661,6 +665,8 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
         showEpisodes: showId => lib.showEpisodes(showId),
         seasonEpisodes: seasonId => lib.seasonEpisodes(seasonId),
         itemDetails: itemId => lib.itemDetails(itemId),
+        subtitleTracks: itemId => lib.subtitleTracks(itemId),
+        subtitleText: (itemId, trackId) => lib.subtitleText(itemId, trackId),
         search: query => lib.search(query),
         continueWatching: () => continueWatching(req),
       };

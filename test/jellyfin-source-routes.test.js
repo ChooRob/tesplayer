@@ -80,7 +80,12 @@ globalThis.fetch = async (value, options = {}) => {
     RunTimeTicks: 30 * 60 * 1e7, UserData: {}, ImageTags: { Primary: 'tag' } };
   if (p === '/Items' && url.searchParams.get('ParentId') === LIB) return json({ TotalRecordCount: 1, Items: [movie] });
   if (p === `/Items/${MOVIE}`) return json({ ...movie, Overview: 'About it', Genres: ['Drama'],
-    MediaSources: [{ MediaStreams: [{ Type: 'Video', Codec: 'hevc', Width: 3840, Height: 2160 }] }] });
+    MediaSources: [{ Id: MOVIE, MediaStreams: [{ Type: 'Video', Codec: 'hevc', Width: 3840, Height: 2160 },
+      { Type: 'Audio', Index: 1, Language: 'eng' },
+      { Type: 'Subtitle', Index: 2, Codec: 'subrip', Language: 'eng', DisplayTitle: 'English - SubRip', IsTextSubtitleStream: true, IsDefault: true },
+      { Type: 'Subtitle', Index: 3, Codec: 'pgssub', Language: 'ger', DisplayTitle: 'German - PGSSUB', IsTextSubtitleStream: false },
+      { Type: 'Subtitle', Index: 4, Codec: 'ass', DisplayTitle: 'Forced', IsTextSubtitleStream: true, IsForced: true }] }] });
+  if (p === `/Videos/${MOVIE}/${MOVIE}/Subtitles/2/0/Stream.vtt`) return new Response('WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n', { headers: { 'Content-Type': 'text/vtt' } });
   if (p === `/Items/${MOVIE}/Images/Primary`) return new Response(new Uint8Array(20), { headers: { 'Content-Type': 'image/jpeg' } });
   if (p === '/UserItems/Resume') return json({ Items: url.searchParams.get('ParentId') === LIB ? [movie] : [] });
   if (p === '/Shows/NextUp') return json({ Items: [episode] });
@@ -260,6 +265,48 @@ test('playback goes through the proxy with the token kept on the server', async 
   assert.equal(stop.get('playSessionId'), PLAY);
   await new Promise(resolve => setImmediate(resolve));
   assert.ok(callsTo('/Sessions/Logout', 'POST').length >= 1);
+});
+
+test('an item lists its subtitle tracks, text ones separately from picture ones', async () => {
+  const cookie = await session();
+  const listed = await request(`/api/library/subtitles/${MOVIE}`, { cookie });
+  assert.equal(listed.status, 200, listed.text);
+  assert.deepEqual(listed.json.tracks, [
+    { id: '2', label: 'English - SubRip', language: 'eng', kind: 'text', forced: false, default: true },
+    { id: '4', label: 'Forced', language: null, kind: 'text', forced: true, default: false },
+    { id: '3', label: 'German - PGSSUB', language: 'deu', kind: 'burn', forced: false, default: false },
+  ]);
+  assert.doesNotMatch(listed.text, /jf-token|api_?key/i);
+  assert.equal((await request('/api/library/subtitles/not-an-id', { cookie })).status, 400);
+});
+
+test('a text track is fetched from Jellyfin as WebVTT, and only that item\'s own text tracks', async () => {
+  const cookie = await session();
+  const vtt = await request(`/api/library/subtitle/${MOVIE}/2`, { cookie });
+  assert.equal(vtt.status, 200, vtt.text);
+  assert.match(vtt.headers['content-type'], /^text\/vtt/);
+  assert.match(vtt.text, /^WEBVTT\n\n00:00:01\.000 --> 00:00:02\.000\nHello/);
+  const upstream = callsTo(`/Videos/${MOVIE}/${MOVIE}/Subtitles/2/0/Stream.vtt`).at(-1);
+  assert.match(upstream.headers.Authorization, /Token="jf-token-/, 'the token goes in the header');
+  assert.equal((await request(`/api/library/subtitle/${MOVIE}/3`, { cookie })).status, 404, 'a picture subtitle is not text');
+  assert.equal((await request(`/api/library/subtitle/${MOVIE}/9`, { cookie })).status, 404);
+  assert.equal((await request(`/api/library/subtitle/${MOVIE}/x`, { cookie })).status, 400);
+  assert.equal((await request(`/api/library/subtitle/${MOVIE}/2`)).status, 401);
+});
+
+test('a chosen subtitle track is burned into the stream, and without one nothing is', async () => {
+  const cookie = await session();
+  const started = await request(`/api/start?key=${MOVIE}&quality=low&playbackId=cc-burn&subtitle=3`, { cookie });
+  assert.equal(started.status, 200, started.text);
+  const info = callsTo(`/Items/${MOVIE}/PlaybackInfo`).at(-1);
+  assert.equal(info.url.searchParams.get('subtitleStreamIndex'), '3');
+  const master = callsTo(`/videos/${DASHED}/master.m3u8`).at(-1).url.searchParams;
+  assert.equal(master.get('SubtitleStreamIndex'), '3');
+  assert.equal(master.get('SubtitleMethod'), 'Encode');
+  const junk = await request(`/api/start?key=${MOVIE}&quality=low&playbackId=cc-junk&subtitle=3%26x%3D1`, { cookie });
+  assert.equal(junk.status, 200, junk.text);
+  assert.equal(callsTo(`/Items/${MOVIE}/PlaybackInfo`).at(-1).url.searchParams.get('subtitleStreamIndex'), null);
+  assert.equal(callsTo(`/videos/${DASHED}/master.m3u8`).at(-1).url.searchParams.get('SubtitleStreamIndex'), '-1');
 });
 
 test('limits group the whole server under one key, and the server is a searchable account', async () => {

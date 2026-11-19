@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>FreeStuffCrazy Player</title>
   <style>
@@ -66,7 +67,7 @@
     html.moving canvas, html.moving #standardVideo, html.moving #stillImage { cursor: move; }
     html.moving #overlay { pointer-events: none; }
     html.moving #topBar, html.moving #controls { pointer-events: auto; }
-    #dimPanel {
+    #dimPanel, #ccPanel {
       position: absolute; right: 20px; bottom: calc(100% - 8px);
       display: flex; flex-direction: column; gap: 10px;
       width: min(380px, calc(100vw - 40px)); padding: 12px 16px;
@@ -80,7 +81,15 @@
     #controls #dimPanel button { width: auto; height: 44px; padding: 0 16px; font-size: 15px; flex: 1; }
     #controls #dimPanel button[aria-pressed="true"] { background: #0878e6; }
     #controls #dimPanel button:disabled { opacity: .45; cursor: default; }
-    #dimBtn[aria-expanded="true"] { background: rgba(255,255,255,.3) !important; }
+    #dimBtn[aria-expanded="true"], #ccBtn[aria-expanded="true"] { background: rgba(255,255,255,.3) !important; }
+    #ccBtn[aria-pressed="true"] { background: #0878e6 !important; }
+    #ccBtn[hidden], #ccPanel[hidden] { display: none; }
+    #ccPanel { max-height: min(60vh, 420px); overflow-y: auto; }
+    #controls #ccPanel button { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; height: auto; min-height: 44px; padding: 8px 16px; font-size: 15px; text-align: left; }
+    #controls #ccPanel button[aria-checked="true"] { background: #0878e6; }
+    #ccPanel .ccNote { font-size: 12px; opacity: .75; white-space: nowrap; }
+    #ccStatus { margin: 0; font-size: 13px; color: #ffbdad; min-height: 0; }
+    #ccStatus:empty { display: none; }
     #soundSection[hidden] { display: none; }
     #soundSection button { min-height: 44px; padding: 10px 18px; border: 0; border-radius: 8px; color: white; background: #41434c; font-size: 15px; cursor: pointer; }
     #soundSection button:disabled { opacity: .45; cursor: default; }
@@ -335,6 +344,8 @@
           <button id="resetPicture" type="button">Reset</button>
         </div>
       </div>
+ <div id="ccPanel" role="menu" aria-label="Captions" hidden></div>
+      <button id="ccBtn" title="Captions" aria-label="Captions" aria-haspopup="menu" aria-expanded="false" aria-controls="ccPanel" hidden><span data-icon="cc"></span></button>
       <button id="dimBtn" title="Adjust sound and picture" aria-label="Adjustments" aria-expanded="false" aria-controls="dimPanel"><span data-icon="tune"></span></button>
       <button id="settingsBtn" title="Playback settings" aria-label="Playback settings" aria-haspopup="dialog" aria-controls="playbackSettings"><span data-icon="gear"></span></button>
     </div>
@@ -391,6 +402,7 @@
     import { measureStartupQuality } from '/engine/startup-quality.js';
     import { QUALITY_STORAGE_KEY, describeQuality, readQualityPreference } from '/engine/quality-preference.js';
     import { setupFullscreenButton } from '/fullscreen.js';
+    import { parseVtt, pickTrack, preferenceFor, readPreference, writePreference, createCaptionLayer } from '/captions.js';
     import { hydrateIcons, iconEl, iconSvg } from '/icons.js';
     import { CENTERED, normalizePicture, readPicture, savePicture } from '/picture-layout.js';
     import { normalizeVolume, readVolume, saveVolume } from '/volume-level.js';
@@ -448,7 +460,7 @@
     }
     function scheduleFade() {
       clearTimeout(fadeTimer);
-      if (overlayPinned || document.getElementById('playbackSettings').open || !document.getElementById('dimPanel').hidden) return;
+      if (overlayPinned || document.getElementById('playbackSettings').open || !document.getElementById('dimPanel').hidden || !document.getElementById('ccPanel').hidden) return;
       fadeTimer = setTimeout(() => {
         overlay.style.opacity = '0';
         overlay.classList.remove('visible');
@@ -834,6 +846,7 @@
       const dimPanel = document.getElementById('dimPanel');
       const dimBtn = document.getElementById('dimBtn');
       function toggleDimPanel(open) {
+        if (open && !ccPanel.hidden) toggleCaptionMenu(false);
         dimPanel.hidden = !open;
         dimBtn.setAttribute('aria-expanded', String(open));
         if (open) clearTimeout(fadeTimer); else { setMoving(false); scheduleFade(); }
@@ -1035,6 +1048,117 @@
 
       const itemKey = isLive ? null : urlParams.get('key');
       const resumeSeconds = isLive ? 0 : Number(urlParams.get('resume')) || 0;
+
+      // ---- Captions ----
+      // A text track is drawn here and turns on and off at once. One the server must
+      // draw into the picture (`burn`) restarts the stream at this spot, with the
+      // choice carried in the address: ?subtitle=<id> for a burned-in track, ?cc=<id>
+      // for a text track picked just before a restart.
+      const ccBtn = document.getElementById('ccBtn');
+      const ccPanel = document.getElementById('ccPanel');
+      let captionTracks = [];
+      let activeCaption = null;
+      let burnedCaption = null;
+      const captionLayer = createCaptionLayer({
+        box: () => (canvas.hidden ? video : canvas).getBoundingClientRect(),
+        lift: () => (overlay.classList.contains('visible') ? document.getElementById('controls').getBoundingClientRect().height + 8 : 0),
+      });
+      setInterval(() => { if (player && activeCaption && !burnedCaption) captionLayer.update(player.clock.currentTime); }, 200);
+
+      async function loadCaptionText(track) {
+        const response = await fetch(`/api/library/subtitle/${encodeURIComponent(itemKey)}/${encodeURIComponent(track.id)}`, { cache: 'force-cache' });
+        if (!response.ok) throw new Error('Captions are not available right now.');
+        return parseVtt(await response.text());
+      }
+
+      function renderCaptionMenu(message = '') {
+        ccBtn.setAttribute('aria-pressed', String(!!activeCaption));
+        ccPanel.replaceChildren();
+        const row = (label, note, checked, track) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.setAttribute('role', 'menuitemradio');
+          button.setAttribute('aria-checked', String(checked));
+          const text = document.createElement('span');
+          text.textContent = label;
+          button.append(text);
+          if (note) { const hint = document.createElement('span'); hint.className = 'ccNote'; hint.textContent = note; button.append(hint); }
+          button.addEventListener('click', () => chooseCaption(track));
+          ccPanel.append(button);
+        };
+        row('Off', '', !activeCaption, null);
+        for (const track of captionTracks) row(track.label + (track.forced ? ' (forced)' : ''), track.kind === 'burn' ? 'restarts video' : '', activeCaption?.id === track.id, track);
+        if (message) { const status = document.createElement('p'); status.id = 'ccStatus'; status.setAttribute('role', 'status'); status.textContent = message; ccPanel.append(status); }
+      }
+
+      function toggleCaptionMenu(open) {
+        ccPanel.hidden = !open;
+        ccBtn.setAttribute('aria-expanded', String(open));
+        if (open) { toggleDimPanel(false); clearTimeout(fadeTimer); } else scheduleFade();
+      }
+      ccBtn.addEventListener('click', () => toggleCaptionMenu(ccPanel.hidden));
+      document.addEventListener('pointerdown', event => {
+        if (!ccPanel.hidden && !ccPanel.contains(event.target) && !ccBtn.contains(event.target)) toggleCaptionMenu(false);
+      });
+      document.addEventListener('keydown', event => { if (event.key === 'Escape' && !ccPanel.hidden) toggleCaptionMenu(false); });
+
+      // Restart this page at the same spot with another burned-in (or no) track.
+      function restartWithCaption(track) {
+        const next = new URL(location.href);
+        next.searchParams.delete('subtitle');
+        next.searchParams.delete('cc');
+        if (track?.kind === 'burn') next.searchParams.set('subtitle', track.id);
+        else if (track) next.searchParams.set('cc', track.id);
+        if (player) next.searchParams.set('resume', String(player.clock.currentTime));
+        next.searchParams.set('paused', player?.state === 'paused' ? '1' : '0');
+        location.replace(next);
+      }
+
+      let captionChoiceVersion = 0;
+      async function chooseCaption(track) {
+        const version = ++captionChoiceVersion;
+        // The picture already carries a burned-in track, or a burned-in one is wanted.
+        if (burnedCaption || track?.kind === 'burn') {
+          writePreference(preferenceFor(track));
+          restartWithCaption(track);
+          return;
+        }
+        try {
+          const cues = track ? await loadCaptionText(track) : null;
+          if (version !== captionChoiceVersion) return;
+          if (track) captionLayer.set(cues); else captionLayer.clear();
+          activeCaption = track;
+          writePreference(preferenceFor(track));
+          renderCaptionMenu();
+          toggleCaptionMenu(false);
+        } catch (error) {
+          if (version !== captionChoiceVersion) return;
+          renderCaptionMenu(error.message);
+        }
+      }
+
+      // Which tracks there are and which to start with, found before playback starts so
+      // a burned-in choice needs no restart. Never holds playback up for long.
+      let startSubtitle = null;
+      const captionsReady = (async () => {
+        if (isLive || !itemKey) return;
+        let tracks = [];
+        try {
+          const response = await fetch(`/api/library/subtitles/${encodeURIComponent(itemKey)}`, { signal: AbortSignal.timeout(3000) });
+          if (response.ok) tracks = (await response.json()).tracks || [];
+        } catch { /* playback goes ahead without captions */ }
+        captionTracks = tracks;
+        if (!tracks.length) return;
+        ccBtn.hidden = false;
+        const byId = id => tracks.find(track => track.id === id);
+        const chosen = byId(urlParams.get('subtitle')) || byId(urlParams.get('cc')) || pickTrack(tracks, readPreference());
+        if (chosen?.kind === 'burn') { burnedCaption = chosen; startSubtitle = chosen.id; activeCaption = chosen; }
+        else if (chosen) {
+          activeCaption = chosen;
+          loadCaptionText(chosen).then(cues => { if (activeCaption === chosen) captionLayer.set(cues); }, () => { activeCaption = null; renderCaptionMenu(); });
+        }
+        renderCaptionMenu();
+      })();
 
       // The next episode of a show. Play Next appears once playback passes the
       // point where the item counts as watched, and the next episode starts by
@@ -1394,6 +1518,7 @@
       }
 
       if (await rejectBlockedPlayback()) return;
+      await captionsReady;
 
       if (isLive) {
         if (!hasQualityOverride) {
@@ -1418,6 +1543,7 @@
         log(`Loading video at ${currentQuality} quality…`);
         const startParams = new URLSearchParams({ quality: currentQuality, playbackId });
         if (itemKey) startParams.set('key', itemKey);
+        if (startSubtitle) startParams.set('subtitle', startSubtitle);
         const startUrl = `/api/start?${startParams}`;
         // A lower tier means the connection already looked weak, so download
         // further ahead whenever it has capacity to spare.

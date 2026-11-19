@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <title>FreeStuffCrazy Player</title>
+  <!-- The FreeStuffCrazy face (from freestuffcrazy.com) with a play button, on the site's navy. -->
+  <rect width="64" height="64" rx="14" fill="#10254a"/>
+  <g transform="translate(-2 -3) scale(1.05)">
+    <circle cx="26" cy="27" r="20" fill="#ffc233"/>
+    <circle cx="18.5" cy="24.5" r="6.2" fill="#fff"/>
+    <circle cx="18.5" cy="24.5" r="2.3" fill="#10254a"/>
+    <circle cx="34.5" cy="25.5" r="4.6" fill="#fff"/>
+    <circle cx="34.5" cy="25.5" r="1.9" fill="#10254a"/>
+    <ellipse cx="26" cy="37" rx="4.5" ry="3.3" fill="#10254a"/>
+  </g>
+  <circle cx="46" cy="46" r="14" fill="#10254a"/>
+  <circle cx="46" cy="46" r="11.5" fill="#fff"/>
+  <path d="M42.5 39.5 L53.5 46 L42.5 52.5 Z" fill="#10254a" stroke="#10254a" stroke-width="1.6" stroke-linejoin="round"/>
+</svg>

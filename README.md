@@ -33,7 +33,7 @@ A domain is easiest. A public IP can use a browser-trusted certificate ([setup](
 
 In a Tesla, Canvas playback is the default. It needs HTTPS and is what lets a passenger watch while the car moves. Quality can be Auto, Ultra, High, Medium, or Low; if video keeps buffering in a Tesla, pick a lower one and see the [FAQ](FAQ.md#video-is-slow-or-keeps-buffering-in-a-tesla).
 
-The [FAQ](FAQ.md) also covers sound and steering wheel issues.
+The CC button in the player bar turns captions on or off. The [FAQ](FAQ.md) also covers captions, sound and steering wheel issues.
 
 ## For developers
 
