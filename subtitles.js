@@ -14,6 +14,30 @@ const MAX_TEXT_BYTES = 2 * 1024 * 1024;
 
 export const SUBTITLE_TEXT_LIMIT = MAX_TEXT_BYTES;
 
+// Stop reading as soon as a subtitle exceeds the limit; response.text() would
+// buffer the entire upstream response before a size check could run.
+export async function readSubtitleText(response) {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const chunks = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > SUBTITLE_TEXT_LIMIT) throw new Error('Subtitle file too large');
+      chunks.push(Buffer.from(value));
+    }
+    return new TextDecoder().decode(Buffer.concat(chunks, bytes));
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 // The text subtitle formats the player can show as they are or after conversion.
 export const TEXT_FORMATS = new Set(['srt', 'subrip', 'vtt', 'webvtt']);
 

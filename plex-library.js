@@ -2,7 +2,7 @@
 // trimmed: no disk cache for thumbnails, no retry wrapper.
 
 import { plexDeviceHeaders } from './plex-connection.js';
-import { describeTrack, orderTracks, toWebVtt, TEXT_FORMATS, TRACK_ID, SUBTITLE_TEXT_LIMIT } from './subtitles.js';
+import { describeTrack, orderTracks, toWebVtt, readSubtitleText, TEXT_FORMATS, TRACK_ID } from './subtitles.js';
 
 const THUMBNAIL_PRESETS = {
   landscape: { width: 600, height: 338 },
@@ -183,9 +183,7 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
     if (clientId) headers['X-Plex-Client-Identifier'] = clientId;
     const res = await fetch(`${plexUrl}${stream.key}`, { headers, redirect: 'error', signal: AbortSignal.timeout(10000) });
     if (!res.ok) { await res.body?.cancel(); throw new Error(`Plex subtitle ${res.status}`); }
-    const text = await res.text();
-    if (text.length > SUBTITLE_TEXT_LIMIT) throw new Error('Subtitle file too large');
-    return toWebVtt(text);
+    return toWebVtt(await readSubtitleText(res));
   }
 
   // Normalize section hubs, including seasons mixed into Recently Added.

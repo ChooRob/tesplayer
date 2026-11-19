@@ -120,7 +120,10 @@ export function sourceProblems(source, { id, type } = {}) {
     for (const name of names) if (typeof source[group][name] !== 'function') problems.push(`${group}.${name} must be a function`);
   }
   const page = source.signInOptions?.signInPage;
-  if (page !== undefined && !SIGN_IN_PAGE.test(page)) problems.push('signInOptions.signInPage must be a path on this site, such as /my-source/sign-in');
+  if ((type ?? source.type) !== 'plex' && (type ?? source.type) !== 'jellyfin' && page === undefined)
+    problems.push('signInOptions.signInPage is required for a plugin source');
+  else if (page !== undefined && !SIGN_IN_PAGE.test(page))
+    problems.push('signInOptions.signInPage must be a path on this site, such as /my-source/sign-in');
   return problems;
 }
 

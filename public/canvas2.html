@@ -1114,16 +1114,25 @@
         location.replace(next);
       }
 
+      let captionChoiceVersion = 0;
       async function chooseCaption(track) {
-        writePreference(preferenceFor(track));
+        const version = ++captionChoiceVersion;
         // The picture already carries a burned-in track, or a burned-in one is wanted.
-        if (burnedCaption || track?.kind === 'burn') { restartWithCaption(track); return; }
+        if (burnedCaption || track?.kind === 'burn') {
+          writePreference(preferenceFor(track));
+          restartWithCaption(track);
+          return;
+        }
         try {
-          if (track) captionLayer.set(await loadCaptionText(track)); else captionLayer.clear();
+          const cues = track ? await loadCaptionText(track) : null;
+          if (version !== captionChoiceVersion) return;
+          if (track) captionLayer.set(cues); else captionLayer.clear();
           activeCaption = track;
+          writePreference(preferenceFor(track));
           renderCaptionMenu();
           toggleCaptionMenu(false);
         } catch (error) {
+          if (version !== captionChoiceVersion) return;
           renderCaptionMenu(error.message);
         }
       }

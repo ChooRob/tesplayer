@@ -1,6 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { toWebVtt, describeTrack, orderTracks, TRACK_ID } from '../subtitles.js';
+import { toWebVtt, describeTrack, orderTracks, readSubtitleText, TRACK_ID, SUBTITLE_TEXT_LIMIT } from '../subtitles.js';
+
+test('subtitle responses stop reading and cancel when the byte limit is exceeded', async () => {
+  let cancelled = false;
+  const response = new Response(new ReadableStream({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(SUBTITLE_TEXT_LIMIT + 1));
+    },
+    cancel() { cancelled = true; },
+  }));
+  await assert.rejects(readSubtitleText(response), /Subtitle file too large/);
+  assert.equal(cancelled, true);
+  assert.equal(await readSubtitleText(new Response('Hello captions')), 'Hello captions');
+});
 
 test('SubRip becomes WebVTT: commas to dots, numbers dropped, blank cues skipped', () => {
   const srt = '﻿1\r\n00:00:01,5 --> 00:00:03,000\r\nHello\r\n\r\n2\r\n00:01:04,000 --> 00:01:05,250\r\nTwo\r\nlines\r\n\r\n3\r\n00:02:00,000 --> 00:02:01,000\r\n\r\n';

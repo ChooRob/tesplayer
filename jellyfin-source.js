@@ -8,7 +8,7 @@ import { QUALITY_TIERS, QUALITY_LEVELS, normalizeQuality, qualityTiers } from '.
 import { parseCookies, safeError } from './security.js';
 import { createCookieSealer, packSession, unpackSession, SESSION_COOKIE_NAME } from './session-cookie.js';
 import { adminSpec, adminConfigured } from './admin-auth.js';
-import { describeTrack, orderTracks, toWebVtt, TRACK_ID, SUBTITLE_TEXT_LIMIT } from './subtitles.js';
+import { describeTrack, orderTracks, toWebVtt, readSubtitleText, TRACK_ID } from './subtitles.js';
 
 const LOGIN_COOKIE_NAME = 'freeStuffCrazyPlayerJellyfinLogin';
 const LOGIN_TTL_MS = 10 * 60 * 1000;
@@ -632,9 +632,7 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
         if (!stream?.IsTextSubtitleStream || !ID.test(sourceId)) return null;
         const response = await request(`/Videos/${itemId}/${sourceId}/Subtitles/${Number(stream.Index)}/0/Stream.vtt`, { credential, timeoutMs: 15000 });
         if (!response.ok) { await response.body?.cancel(); throw new Error(`Jellyfin subtitle ${response.status}`); }
-        const text = await response.text();
-        if (text.length > SUBTITLE_TEXT_LIMIT) throw new Error('Subtitle file too large');
-        return toWebVtt(text);
+        return toWebVtt(await readSubtitleText(response));
       },
       async search(query) {
         const data = await items({ searchTerm: query, Recursive: 'true', IncludeItemTypes: 'Movie,Series,Episode', Limit: '30', Fields: ITEM_FIELDS });

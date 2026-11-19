@@ -90,4 +90,7 @@ test('a plugin source\'s sign-in page must be a path on this site', () => {
   for (const bad of ['//evil.example', 'https://evil.example/x', 'minimal/sign-in', '/a b', '/a?x=1', '/a\\b', '/<script>']) assert.ok(!SIGN_IN_PAGE.test(bad), bad);
   const source = { ...minimalSource({ id: 'minimal' }), signInOptions: { signInPage: '//evil.example' } };
   assert.match(sourceProblems(source)[0], /signInPage must be a path/);
+  const missing = { ...minimalSource({ id: 'minimal' }) };
+  delete missing.signInOptions;
+  assert.match(sourceProblems(missing, { id: 'minimal', type: 'minimal' })[0], /signInPage is required/);
 });
