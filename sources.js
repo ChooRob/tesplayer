@@ -22,7 +22,7 @@
 //
 // Plugins add backend types by exporting
 //   sources: { <type>: { configure(env, { plugins }), warnings?(env), create(args) } }
-// Plex and Jellyfin are exported the same way, by bundled-sources.js, and always loaded.
+// Plex, Jellyfin and Emby are exported the same way, by bundled-sources.js, and always loaded.
 // `configure(env, { plugins })` says whether this install uses the type: return null when it
 // does not, or an options object (possibly empty) when it does, or throw an Error
 // whose message names the setting at fault (never its value) to show a setup
@@ -54,7 +54,7 @@ function pluginSourceTypes(plugins) {
   return found;
 }
 
-export const NOTHING_CONFIGURED = 'No media server is set up. In the server\'s .env, set PLEX_EMAIL (the Plex account that signs in) for Plex, or JELLYFIN_URL for Jellyfin, then restart.';
+export const NOTHING_CONFIGURED = 'No media server is set up. In the server\'s .env, set PLEX_EMAIL (the Plex account that signs in) for Plex, JELLYFIN_URL for Jellyfin, or EMBY_URL for Emby, then restart.';
 
 // The sources this install is set up for, and what is wrong with the setup: each
 // source type (the bundled Plex and Jellyfin, then any from plugins) says for

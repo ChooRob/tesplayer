@@ -10,7 +10,7 @@ Compose starts the player and Caddy. Only Caddy opens host ports; it obtains and
 
 ## Set up
 
-1. Install Docker with the Compose plugin. Make sure this machine can reach your Plex or Jellyfin server.
+1. Install Docker with the Compose plugin. Make sure this machine can reach your Plex, Jellyfin or Emby server.
 2. Copy the sample settings:
 
    ```sh
@@ -18,7 +18,7 @@ Compose starts the player and Caddy. Only Caddy opens host ports; it obtains and
    cp config.example.json config.json
    ```
 
-3. Edit `.env`. Set `APP_ORIGIN` to the HTTPS address viewers will open. Replace `SESSION_SECRET=changeme` with a random value; `openssl rand -hex 32` can generate one. For Plex, set the owner's `PLEX_EMAIL`. For Jellyfin, set `JELLYFIN_URL`. If the Plex account owns multiple servers, set `PLEX_URL` to the one you want.
+3. Edit `.env`. Set `APP_ORIGIN` to the HTTPS address viewers will open. Replace `SESSION_SECRET=changeme` with a random value; `openssl rand -hex 32` can generate one. For Plex, set the owner's `PLEX_EMAIL`. For Jellyfin, set `JELLYFIN_URL`. For Emby, set `EMBY_URL` (its address, such as `http://192.168.1.50:8096`); viewers sign in with their Emby username and password. If the Plex account owns multiple servers, set `PLEX_URL` to the one you want.
 4. Follow the address-specific steps below, then start the containers:
 
    ```sh

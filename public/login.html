@@ -31,6 +31,8 @@
     .signIn + .signIn { margin-top: 12px; }
     /* Jellyfin's brand gradient, purple to blue. */
     .signIn.jellyfin { background: #aa5cc3 linear-gradient(90deg, #aa5cc3, #00a4dc); color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); }
+    /* Emby's brand green. */
+    .signIn.emby { background: #52b54b; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3); }
     a.signIn.other { display: block; text-align: center; text-decoration: none; margin-top: 12px; }
     .signIn:disabled { opacity: 0.6; cursor: default; }
     #jellyfinStep p { margin: 12px 0; }
@@ -269,7 +271,7 @@
           && typeof source.signInPage === 'string' && /^\/(?!\/)[A-Za-z0-9\-._~\/]{0,200}$/.test(source.signInPage));
         document.getElementById('otherSources').replaceChildren(...others.map((source) => {
           const link = document.createElement('a');
-          link.className = 'signIn other';
+          link.className = source.type === 'emby' ? 'signIn other emby' : 'signIn other';
           link.href = source.signInPage;
           link.textContent = String(source.signInLabel || `Sign in with ${source.name}`).slice(0, 80);
           return link;

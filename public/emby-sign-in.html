@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FreeStuffCrazy Player — sign in with Emby</title>
+  <style>
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { margin: 0; background: #111; color: #eee; font-family: -apple-system, system-ui, sans-serif; }
+    body { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .card { text-align: center; width: 100%; max-width: 360px; padding: 32px; }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    p { color: #999; font-size: 14px; margin: 0 0 12px; }
+    h1 + p { margin-bottom: 28px; }
+    form { display: grid; gap: 12px; text-align: left; }
+    #back { background: none; border: none; color: #999; font: inherit; font-size: 13px; text-decoration: underline; cursor: pointer; margin-top: 18px; min-height: 44px; width: auto; padding: 0 8px; }
+    label { display: grid; gap: 6px; font-size: 13px; color: #bbb; }
+    input {
+      background: #1c1c1c; color: #eee; border: 1px solid #444; border-radius: 6px;
+      padding: 12px; font-size: 16px; min-height: 44px;
+    }
+    button {
+      background: #52b54b; color: #fff; border: none; border-radius: 8px;
+      padding: 14px 28px; font-size: 16px; font-weight: 700; cursor: pointer; width: 100%; min-height: 48px;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+    a { color: #999; font-size: 13px; display: inline-block; margin-top: 18px; min-height: 44px; line-height: 44px; }
+    #status { margin-top: 18px; font-size: 13px; color: #999; min-height: 18px; }
+    #status.error { color: #ff6b6b; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Sign in with Emby</h1>
+    <form id="serverForm" hidden>
+      <p id="serverHint">Enter your Emby server's https:// address.</p>
+      <label><span id="serverLabel">Server address</span><input id="server" name="server" type="text" inputmode="url" autocomplete="url" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="https://emby.example.com"></label>
+      <button type="submit" id="serverSubmit">Continue</button>
+    </form>
+    <form id="form" hidden>
+      <p id="signInHint">Use your Emby username and password.</p>
+      <label>Username<input id="username" name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>
+      <label>Password<input id="password" name="password" type="password" autocomplete="current-password"></label>
+      <button type="submit" id="submit">Sign in</button>
+    </form>
+    <div id="status" role="status"></div>
+    <button type="button" id="back" hidden>Use a different server</button><br>
+    <a href="/login">Back</a>
+  </main>
+  <script type="module" src="/emby-sign-in.js"></script>
+</body>
+</html>

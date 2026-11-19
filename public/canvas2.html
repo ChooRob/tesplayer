@@ -633,6 +633,7 @@
       const DROP_RATE_SAMPLE_MS = 1000;
       const DROP_RATE_THRESHOLD = 2; // dropped frames/sec sustained
       const STRUGGLE_DURATION_MS = 6000;
+      const DECODER_BEHIND_QUEUE = 2; // fewer decoded frames than this waiting means the decoder is behind
       let lastDropSampleAt = performance.now();
       let lastDropCount = 0;
       let strugglingSince = null;
@@ -662,7 +663,12 @@
         const dropRate = (stats.videoDropCount - lastDropCount) / (elapsedMs / 1000);
         lastDropCount = stats.videoDropCount;
         lastDropSampleAt = now;
-        if (dropRate < DROP_RATE_THRESHOLD) { strugglingSince = null; return; }
+        // Dropped frames only mean the device can't decode fast enough when the decoder is
+        // behind, with no frames waiting. Frames dropped while the decoder keeps several
+        // ready are the screen skipping frames (a slow display refresh, as in some cars),
+        // which a lower quality cannot fix: lowering it would only restart the stream.
+        const decoderBehind = typeof stats.videoQueueLength !== 'number' || stats.videoQueueLength < DECODER_BEHIND_QUEUE;
+        if (dropRate < DROP_RATE_THRESHOLD || !decoderBehind) { strugglingSince = null; return; }
         strugglingSince ??= now;
         if (now - strugglingSince >= STRUGGLE_DURATION_MS) {
           downgrading = downgradeQuality();
