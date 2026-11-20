@@ -43,6 +43,10 @@ const calls = [];
 let pinSequence = 500;
 // Requests for a stream's playlist that time out first, as when Plex waits on a drive spinning up.
 let coldDriveTimeouts = 0;
+let oversizedPlaylist = null;
+const oversizedBody = () => new Response('x'.repeat(4 * 1024 * 1024 + 1), {
+  headers: { 'Content-Type': 'application/vnd.apple.mpegurl', ...(oversizedPlaylist === 'declared' ? { 'Content-Length': String(4 * 1024 * 1024 + 1) } : {}) },
+});
 globalThis.fetch = async (value, options = {}) => {
   const url = new URL(value);
   calls.push({ url, options });
@@ -79,10 +83,12 @@ globalThis.fetch = async (value, options = {}) => {
   if (p === '/music/:/transcode/universal/stop') return new Response('');
   if (p === '/video/:/transcode/universal/decision') return json({ MediaContainer: {} });
   if (p === '/video/:/transcode/universal/start.m3u8') {
+    if (oversizedPlaylist) return oversizedBody();
     const session = url.searchParams.get('session');
     return new Response(`#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nsession/${session}/base/index.m3u8\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
   }
   if (/^\/video\/:\/transcode\/universal\/session\/[^/]+\/base\/index\.m3u8$/.test(p)) {
+    if (oversizedPlaylist) return oversizedBody();
     if (coldDriveTimeouts > 0) { coldDriveTimeouts -= 1; throw new DOMException('The operation timed out.', 'TimeoutError'); }
     return new Response('#EXTM3U\n#EXTINF:8.0,\n00000.ts\n#EXT-X-ENDLIST\n', { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
   }
@@ -218,6 +224,24 @@ test('browsing, playback, the media proxy and watch state go through the Plex so
   // Signing out stops the transcode the source started.
   assert.equal((await request('/api/auth/logout', { method: 'POST', cookie })).status, 200);
   assert.equal(callsTo('/video/:/transcode/universal/stop').at(-1).url.searchParams.get('session'), sessionId);
+});
+
+test('Plex playlists are bounded at stream start and in the media proxy', async () => {
+  const cookie = await signIn();
+  try {
+    oversizedPlaylist = 'declared';
+    assert.equal((await request('/api/start?key=5&playbackId=oversized-start', { cookie })).status, 502);
+
+    oversizedPlaylist = null;
+    const started = await request('/api/start?key=5&playbackId=bounded-proxy', { cookie });
+    assert.equal(started.status, 200);
+    const variant = started.text.split('\n').find(line => line.startsWith('/proxy/'));
+
+    oversizedPlaylist = 'streamed'; // No Content-Length: the body itself must be checked.
+    assert.equal((await request(variant, { cookie })).status, 502);
+  } finally {
+    oversizedPlaylist = null;
+  }
 });
 
 test('a track plays through Plex\'s music transcoder, as audio only, and is stopped there', async () => {
