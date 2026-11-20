@@ -1238,8 +1238,10 @@
         // drive spinning up; the player keeps asking (see media-retry.js).
         onMediaWait: () => {
           if (!vodLoading || isLive) return;
-          if (!waitingForServer) log('waiting for the media server…');
+          // The player says so before every wait (about once a second): the banner goes up once.
+          if (waitingForServer) return;
           waitingForServer = true;
+          log('waiting for the media server…');
           showBanner('Waking the media server…', { persist: true });
         },
         onStateChange: (state, detail) => {
@@ -2431,6 +2433,7 @@
           if (!directAttempt) throw failedToStart(error);
           directAttempt = false;
           showBanner('Direct connection unavailable — using server relay');
+          waitingForServer = false; // that banner replaced the waiting one; the relay may have its own wait to show
           try { await player.load(startUrl, { readAheadSeconds, readAheadParallelism, startTime }); }
           catch (fallbackError) {
             if (await rejectBlockedPlayback(fallbackError)) return;
