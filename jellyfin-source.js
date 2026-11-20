@@ -22,6 +22,10 @@ const PLAYLIST_LIMIT = 4 * 1024 * 1024;
 const AUDIO_BITRATE = 128_000;
 const ID = /^[0-9a-f]{32}$/;
 // Media paths a viewer may fetch through /proxy/, relative to the server.
+// The thumbnails shown when scrubbing (Trickplay) are listed in the master playlist as image streams. The player has
+// no use for them, they are not media this proxy serves, and their playlists carry no play session, so they are
+// dropped rather than let through: everything else in a playlist must still be one of the media paths below.
+const TRICKPLAY_TAG = /^#EXT-X-IMAGE-STREAM-INF\b/;
 const MEDIA_PATH = /^videos\/[0-9a-f-]{32,36}\/(?:master\.m3u8|main\.m3u8|hls1\/[A-Za-z0-9_-]{1,64}\/\d{1,7}\.(?:ts|mp4|m4s))$/i;
 const IMAGE_TYPES = new Set(['Primary', 'Backdrop', 'Thumb']);
 const THUMBNAIL_PRESETS = {
@@ -744,12 +748,14 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
       // scheme every origin is "null", so comparing origins would let any host through.
       if (url.protocol !== serverUrl.protocol || url.host !== serverUrl.host || !url.pathname.startsWith(serverUrl.pathname.replace(/\/$/, ''))
         || !MEDIA_PATH.test(path) || url.searchParams.get('PlaySessionId') !== playSessionId) {
+        // Say which entry, so a new kind in Jellyfin's playlists can be told apart (the path only: no query, so no token).
+        console.error('Jellyfin playlist entry refused:', JSON.stringify(path.slice(0, 120)));
         throw new Error('Unexpected Jellyfin media URI');
       }
       for (const key of [...url.searchParams.keys()]) if (/^api_?key$/i.test(key)) url.searchParams.delete(key);
       return `/proxy/${path}?${url.searchParams}`;
     };
-    return text.split('\n').map(line => {
+    return text.split('\n').filter(line => !TRICKPLAY_TAG.test(line)).map(line => {
       if (!line.trim()) return line;
       if (line.startsWith('#')) return line.replace(/URI="([^"]+)"/g, (_match, uri) => `URI="${rewrite(uri)}"`);
       return rewrite(line.trim());
