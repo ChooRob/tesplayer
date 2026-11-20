@@ -28,7 +28,8 @@ function player(search, storage) {
         firstElementChild: { textContent: '' },
         setAttribute(name, value) { this.attributes[name] = value; },
         addEventListener(type, fn) { listeners[type] = fn; },
-        replaceChildren() {}, append() {}, querySelector: () => null,
+        replaceChildren(...kids) { this.children = kids; }, append(...kids) { (this.children ??= []).push(...kids); },
+        querySelector: () => null, listeners,
         click() { listeners.click?.(); },
       });
     }
@@ -159,3 +160,58 @@ test('without a queue, Play Next goes to the show\'s next episode as before', ()
   assert.equal(page.replaced[0].searchParams.get('videoQueue'), null);
   assert.equal(page.element('nextTrackBtn').hidden, true);
 });
+
+const filmsOf = count => Array.from({ length: count }, (_, at) => ({ ratingKey: String(100 + at), title: `Film ${at + 1}`, type: 'movie', durationMs: 5400000 }));
+const longQueue = (count, start) => {
+  const storage = memoryStorage();
+  musicQueue.saveQueue(storage, musicQueue.createQueue({ label: 'Movies', items: filmsOf(count), id: 'q1', start }));
+  return storage;
+};
+const rowsOf = page => page.element('videoQueueList').children;
+
+test('the queue button appears with a film queue and opens a window of 40 around the film playing', () => {
+  const page = started('?key=130&videoQueue=q1', longQueue(100, 30), 'Film 31');
+  assert.equal(page.element('queueBtn').hidden, false);
+  assert.equal(page.element('videoQueue').hidden, true, 'closed until it is asked for');
+  page.element('queueBtn').click();
+  assert.equal(page.element('videoQueue').hidden, false);
+  assert.equal(page.element('queueBtn').attributes['aria-pressed'], 'true');
+  const rows = rowsOf(page);
+  const films = rows.filter(row => /^q( |$)/.test(row.className));
+  assert.equal(films.length, 40);
+  assert.deepEqual(rows.filter(row => row.className === 'qNote').map(row => row.textContent), ['20 earlier', '40 more']);
+  assert.equal(films.filter(row => row.className.includes('played')).length, 10, 'the last 10 played, dimmed');
+  assert.equal(films.findIndex(row => row.className.includes('current')), 10);
+  assert.equal(page.element('videoQueueLabel').textContent, 'Playing in order · 100 films');
+  assert.equal(page.element('videoQueueName').textContent, 'Movies');
+});
+
+test('tapping a film in the queue plays it, with the queue; tapping the one playing closes the panel', async () => {
+  const storage = longQueue(100, 30);
+  const page = started('?key=130&videoQueue=q1&tab=1', storage, 'Film 31');
+  page.element('queueBtn').click();
+  const films = rowsOf(page).filter(row => /^q( |$)/.test(row.className));
+  films[12].children[0].listeners.click(); // two films ahead of the current one (index 10)
+  await tick();
+  const target = page.replaced[0];
+  assert.equal(target.searchParams.get('key'), '132');
+  assert.equal(target.searchParams.get('videoQueue'), 'q1');
+  assert.equal(target.searchParams.get('tab'), '1');
+  assert.equal(musicQueue.readQueue(storage, 'q1').index, 32, 'the position is kept for the next page');
+  films[10].children[0].listeners.click();
+  assert.equal(page.element('videoQueue').hidden, true, 'the film playing closes it');
+});
+
+test('the panel stays open from one film to the next, and Escape or the button closes it', () => {
+  const storage = longQueue(100, 5);
+  const first = started('?key=105&videoQueue=q1', storage, 'Film 6');
+  first.element('queueBtn').click();
+  const stored = first.context.sessionStorage.getItem('freeStuffCrazyPlayer.queueOpen');
+  assert.equal(stored, '1', 'remembered for the next page');
+  const next = started('?key=106&videoQueue=q1', first.context.sessionStorage, 'Film 7');
+  assert.equal(next.element('videoQueue').hidden, false, 'open on the next film without being asked');
+  next.element('queueBtn').click();
+  assert.equal(next.element('videoQueue').hidden, true);
+  assert.equal(next.context.sessionStorage.getItem('freeStuffCrazyPlayer.queueOpen'), '0');
+});
+
