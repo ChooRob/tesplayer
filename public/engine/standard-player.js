@@ -1,5 +1,6 @@
 import { Input, BufferSource, ALL_FORMATS } from '../vendor/mediabunny.mjs';
 import { mp4InitEnd, joinBytes } from './mp4-init.js';
+import { HLS_LOAD_POLICIES } from './media-retry.js';
 
 const MediaSourceClass = () => globalThis.MediaSource || globalThis.ManagedMediaSource;
 
@@ -47,9 +48,10 @@ export class StandardPlayer {
       || !!MediaSourceClass()?.isTypeSupported('video/mp4; codecs="avc1.42E01E,mp4a.40.2"');
   }
 
-  constructor({ video, onStateChange = () => {}, onStats = () => {} }) {
+  constructor({ video, onStateChange = () => {}, onStats = () => {}, onMediaWait = () => {} }) {
     this.video = video;
     this.onStateChange = onStateChange;
+    this.onMediaWait = onMediaWait;
     this.state = 'idle';
     this.clock = { get currentTime() { return video.currentTime; } };
     this.listeners = [];
@@ -95,11 +97,13 @@ export class StandardPlayer {
         await ready.catch(() => {});
         throw err;
       }
-      this.hls = new Hls({ backBufferLength: 30, maxBufferLength: 20 });
+      this.hls = new Hls({ backBufferLength: 30, maxBufferLength: 20, ...HLS_LOAD_POLICIES });
       this.hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
           this.fail(new Error(`Stream failed: ${data.details}`));
           this.liveAbort.abort();
+        } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+          this.onMediaWait({ status: data.response?.code ?? 0 });
         }
       });
       this.hls.loadSource(url);

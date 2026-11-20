@@ -48,6 +48,8 @@ const KID = '9'.repeat(31) + '8';
 const jellyfin = { quickConnect: true, approved: false, administrator: false, otherServer: false, extraMasterLines: '', tokens: 0,
   user: { Id: USER, Name: 'Sam' }, tokenUsers: new Map() };
 const calls = [];
+// Media playlist requests that time out first, as when Jellyfin waits on a drive spinning up.
+let coldDriveTimeouts = 0;
 const originalFetch = globalThis.fetch;
 globalThis.fetch = async (value, options = {}) => {
   const url = new URL(value);
@@ -92,6 +94,7 @@ globalThis.fetch = async (value, options = {}) => {
   if (p === `/Items/${MOVIE}/PlaybackInfo`) return json({ PlaySessionId: PLAY, MediaSources: [{ Id: MOVIE,
     TranscodingUrl: `/videos/${DASHED}/master.m3u8?DeviceId=x&MediaSourceId=${MOVIE}&PlaySessionId=${PLAY}&ApiKey=jf-token&SubtitleStreamIndex=3&SubtitleMethod=Encode&AudioBitrate=384000&VideoBitrate=616000` }] });
   if (p === `/videos/${DASHED}/master.m3u8`) return new Response(`#EXTM3U\n${jellyfin.extraMasterLines}#EXT-X-STREAM-INF:BANDWIDTH=1000000\nmain.m3u8?PlaySessionId=${PLAY}&api_key=jf-token&VideoCodec=h264\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
+  if (p === `/videos/${DASHED}/main.m3u8` && coldDriveTimeouts > 0) { coldDriveTimeouts -= 1; throw new DOMException('The operation timed out.', 'TimeoutError'); }
   if (p === `/videos/${DASHED}/main.m3u8`) return new Response(`#EXTM3U\n#EXTINF:3.0,\nhls1/main/0.ts?PlaySessionId=${PLAY}&runtimeTicks=0\n#EXT-X-ENDLIST\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
   if (p === `/videos/${DASHED}/hls1/main/0.ts`) return new Response(new Uint8Array(188), { headers: { 'Content-Type': 'video/mp2t' } });
   if (['/Sessions/Playing', '/Sessions/Playing/Progress', '/Sessions/Playing/Stopped', '/Sessions/Logout', '/Videos/ActiveEncodings'].includes(p)) return new Response(null, { status: 204 });
@@ -248,6 +251,11 @@ test('playback goes through the proxy with the token kept on the server', async 
   assert.equal(master.get('SubtitleStreamIndex'), '-1');
   assert.equal(master.get('SubtitleMethod'), null);
   assert.equal(master.get('AudioBitrate'), '128000');
+
+  coldDriveTimeouts = 1;
+  const slow = await request(variant, { cookie });
+  assert.equal(slow.status, 503, 'a media server that has not answered in time is retried, not failed');
+  assert.equal(slow.headers['retry-after'], '1');
 
   const media = await request(variant, { cookie });
   const segment = media.text.split('\n').find(line => line.startsWith('/proxy/'));

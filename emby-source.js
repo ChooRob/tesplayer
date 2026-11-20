@@ -12,6 +12,7 @@ import { createCookieSealer, packSession, unpackSession, SESSION_COOKIE_NAME } f
 import { adminSpec, adminConfigured } from './admin-auth.js';
 import { serverPrompt } from './jellyfin-source.js';
 import { describeTrack, orderTracks, toWebVtt, readSubtitleText, TRACK_ID } from './subtitles.js';
+import { isTimeout, sendMediaServerSlow } from './media-server-wait.js';
 
 const LOGIN_COOKIE_NAME = 'freeStuffCrazyPlayerEmbyLogin';
 const LOGIN_TTL_MS = 10 * 60 * 1000;
@@ -809,7 +810,9 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
       else res.end();
     } catch (err) {
       console.error('Emby request failed');
-      if (!res.headersSent) res.status(err.message === 'Not authenticated' ? 401 : 502).end();
+      if (res.headersSent) return;
+      if (isTimeout(err)) return sendMediaServerSlow(res);
+      res.status(err.message === 'Not authenticated' ? 401 : 502).end();
     }
   }
 

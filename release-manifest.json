@@ -203,5 +203,8 @@
   "images/jellyfin-guide/19-install-plugin.jpg",
   "images/jellyfin-guide/20-confirm-install.jpg",
   "images/jellyfin-guide/21-dashboard-restart.jpg",
-  "public/saved-music.js"
+  "public/saved-music.js",
+  "media-server-wait.js",
+  "public/engine/media-retry.js",
+  "test/media-retry.test.js"
 ]

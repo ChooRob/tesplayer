@@ -9,6 +9,7 @@ import { parseCookies, safeError, readBodyText } from './security.js';
 import { createCookieSealer, packSession, unpackSession, SESSION_COOKIE_NAME } from './session-cookie.js';
 import { adminSpec, adminConfigured } from './admin-auth.js';
 import { describeTrack, orderTracks, toWebVtt, readSubtitleText, TRACK_ID } from './subtitles.js';
+import { isTimeout, sendMediaServerSlow } from './media-server-wait.js';
 
 const LOGIN_COOKIE_NAME = 'freeStuffCrazyPlayerJellyfinLogin';
 const LOGIN_TTL_MS = 10 * 60 * 1000;
@@ -864,7 +865,9 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
       else res.end();
     } catch (err) {
       console.error('Jellyfin request failed');
-      if (!res.headersSent) res.status(err.message === 'Not authenticated' ? 401 : 502).end();
+      if (res.headersSent) return;
+      if (isTimeout(err)) return sendMediaServerSlow(res);
+      res.status(err.message === 'Not authenticated' ? 401 : 502).end();
     }
   }
 

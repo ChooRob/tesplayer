@@ -96,15 +96,19 @@ test('fragmented MP4 uses actual codec configuration and cancels the stream on d
 
 test('VOD loading falls back once on direct failure and propagates proxy failures', async () => {
   const html = readFileSync(new URL('../public/canvas2.html', import.meta.url), 'utf8');
-  const start = html.indexOf('        try {\n          await player.load(startUrl');
+  const start = html.indexOf('        // Say so rather than leave the spinner running');
   const end = html.indexOf('        seekBar.max', start);
   assert.ok(start > 0 && end > start);
   const source = `(async () => { ${html.slice(start, end)} })()`;
   for (const mode of ['success', 'direct-fails', 'both-fail', 'forced-proxy']) {
     const urls = [];
+    const banners = [];
+    let hidden = 0;
     const context = {
       startUrl: '/api/start?key=123', readAheadSeconds: 60, readAheadParallelism: undefined, startTime: 0, directAttempt: mode !== 'forced-proxy', vodLoading: true,
-      showBanner() {}, rejectBlockedPlayback: async () => false,
+      // As if the media server was slow to answer and "Waking the media server…" is up.
+      waitingForServer: mode === 'forced-proxy', hideBanner: () => { hidden += 1; },
+      showBanner: (text, options = {}) => banners.push({ text, ...options }), rejectBlockedPlayback: async () => false,
       selection: { mode: 'standard' }, document: { getElementById: () => ({}) },
       player: { async load(url) {
         urls.push(url);
@@ -112,8 +116,16 @@ test('VOD loading falls back once on direct failure and propagates proxy failure
       } },
     };
     const result = vm.runInNewContext(source, context);
-    if (mode === 'both-fail') await assert.rejects(result, /unreachable/);
-    else { await result; assert.equal(context.vodLoading, false); }
+    if (mode === 'both-fail') {
+      await assert.rejects(result, /unreachable/);
+      // Not left on the spinner: the failure is shown, with a way to try again.
+      assert.match(banners.at(-1).text, /could not start/);
+      assert.equal(typeof banners.at(-1).onClick, 'function');
+    } else {
+      await result;
+      assert.equal(context.vodLoading, false);
+      assert.equal(hidden, mode === 'forced-proxy' ? 1 : 0, 'the waiting banner goes once the stream has started');
+    }
     assert.deepEqual(urls, mode === 'forced-proxy' ? ['/api/start?key=123']
       : mode === 'success' ? ['/api/start?key=123&direct=1']
       : ['/api/start?key=123&direct=1', '/api/start?key=123']);

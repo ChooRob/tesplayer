@@ -161,7 +161,10 @@ the pages read:
 - `proxy(req, res, { ownsSession })` serves `/proxy/*`. Before fetching anything,
   require `ownsSession(sessionId)` to be true for the stream's session ID and that the
   path is one you generated, so one viewer cannot read another's stream or turn the
-  proxy into a general fetcher.
+  proxy into a general fetcher. When your server has not answered in time (a drive
+  spinning up, a transcoder starting), answer with `sendMediaServerSlow(res)` from
+  `media-server-wait.js`, a 503 with `Retry-After`: the player then asks again for
+  about a minute instead of failing the stream.
 - `stop(active)` ends the stream upstream, given the object you put in `state.active`.
 - `directCapable(req)` and `mediaOrigin(req)` let the browser fetch media straight
   from the server when it can; return `false` and `''` to always go through the proxy.
