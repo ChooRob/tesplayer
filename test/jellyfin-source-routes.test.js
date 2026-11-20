@@ -45,7 +45,7 @@ Object.assign(process.env, {
 
 const KID = '9'.repeat(31) + '8';
 // user: who the next sign-in is; tokenUsers maps each issued token to its user.
-const jellyfin = { quickConnect: true, approved: false, administrator: false, otherServer: false, tokens: 0,
+const jellyfin = { quickConnect: true, approved: false, administrator: false, otherServer: false, extraMasterLines: '', tokens: 0,
   user: { Id: USER, Name: 'Sam' }, tokenUsers: new Map() };
 const calls = [];
 const originalFetch = globalThis.fetch;
@@ -91,7 +91,7 @@ globalThis.fetch = async (value, options = {}) => {
   if (p === '/Shows/NextUp') return json({ Items: [episode] });
   if (p === `/Items/${MOVIE}/PlaybackInfo`) return json({ PlaySessionId: PLAY, MediaSources: [{ Id: MOVIE,
     TranscodingUrl: `/videos/${DASHED}/master.m3u8?DeviceId=x&MediaSourceId=${MOVIE}&PlaySessionId=${PLAY}&ApiKey=jf-token&SubtitleStreamIndex=3&SubtitleMethod=Encode&AudioBitrate=384000&VideoBitrate=616000` }] });
-  if (p === `/videos/${DASHED}/master.m3u8`) return new Response(`#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000000\nmain.m3u8?PlaySessionId=${PLAY}&api_key=jf-token&VideoCodec=h264\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
+  if (p === `/videos/${DASHED}/master.m3u8`) return new Response(`#EXTM3U\n${jellyfin.extraMasterLines}#EXT-X-STREAM-INF:BANDWIDTH=1000000\nmain.m3u8?PlaySessionId=${PLAY}&api_key=jf-token&VideoCodec=h264\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
   if (p === `/videos/${DASHED}/main.m3u8`) return new Response(`#EXTM3U\n#EXTINF:3.0,\nhls1/main/0.ts?PlaySessionId=${PLAY}&runtimeTicks=0\n#EXT-X-ENDLIST\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
   if (p === `/videos/${DASHED}/hls1/main/0.ts`) return new Response(new Uint8Array(188), { headers: { 'Content-Type': 'video/mp2t' } });
   if (['/Sessions/Playing', '/Sessions/Playing/Progress', '/Sessions/Playing/Stopped', '/Sessions/Logout', '/Videos/ActiveEncodings'].includes(p)) return new Response(null, { status: 204 });
@@ -362,6 +362,28 @@ test('the one admin is the Jellyfin user named by both ID and username, whatever
     jellyfin.user = { Id: USER, Name: 'Sam' };
     jellyfin.administrator = false;
   }
+});
+
+test('a master playlist that lists Trickplay thumbnails still plays, and anything else unknown in it is still refused', async () => {
+  const cookie = await session();
+  const trickplay = `#EXT-X-IMAGE-STREAM-INF:BANDWIDTH=12345,RESOLUTION=320x180,CODECS="jpeg",URI="Trickplay/320/tiles.m3u8?MediaSourceId=${MOVIE}&ApiKey=jf-token"\n`;
+  const quiet = console.error;
+  const logged = [];
+  console.error = (...args) => { logged.push(args.join(' ')); };
+  try {
+    jellyfin.extraMasterLines = trickplay;
+    const started = await request(`/api/start?key=${MOVIE}&quality=low&playbackId=trickplay-play`, { cookie });
+    assert.equal(started.status, 200, started.text);
+    assert.doesNotMatch(started.text, /Trickplay|IMAGE-STREAM|jf-token|api_?key/i, 'the thumbnail playlist is left out, with its token');
+    assert.match(started.text, /^\/proxy\/videos\/.*main\.m3u8\?/m, 'and the video is still there');
+
+    // Only that tag is dropped: another entry that is not a media path is still refused, and says which.
+    jellyfin.extraMasterLines = `#EXT-X-MEDIA:TYPE=SUBTITLES,URI="Subtitles/1/stream.vtt?MediaSourceId=${MOVIE}&ApiKey=jf-token"\n`;
+    const refused = await request(`/api/start?key=${MOVIE}&quality=low&playbackId=other-play`, { cookie });
+    assert.notEqual(refused.status, 200);
+    assert.ok(logged.some(line => /playlist entry refused/.test(line) && /Subtitles\/1\/stream\.vtt/.test(line)), logged.join('\n'));
+    assert.ok(!logged.some(line => /jf-token/.test(line)), 'the log never carries the token');
+  } finally { console.error = quiet; jellyfin.extraMasterLines = ''; }
 });
 
 test('signing out everywhere rejects this user’s other cookies', async () => {
