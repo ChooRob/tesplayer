@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createQueue, shuffled, saveQueue, readQueue, positionOf, visibleWindow, withIndex, trackSummary, MAX_QUEUE, isResumable, queueWindow, QUEUE_WINDOW } from '../public/music-queue.js';
+import { createQueue, shuffled, saveQueue, readQueue, positionOf, visibleWindow, withIndex, trackSummary, MAX_QUEUE, isResumable, queueWindow, QUEUE_WINDOW, wrapsReshuffled, reshuffledForRepeat } from '../public/music-queue.js';
 
 const tracks = n => Array.from({ length: n }, (_, i) => ({ ratingKey: i + 1, title: `Song ${i + 1}`, artist: 'A', album: 'B', durationMs: 1000 * (i + 1), episode: i + 1, season: 1, thumbnail: '/t', junk: 'dropped' }));
 const memory = () => { const data = new Map(); return { getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value), removeItem: key => data.delete(key) }; };
@@ -194,4 +194,43 @@ test('the panel beside a film lists a window of 40: the one playing, the last 10
     assert.equal(to - from, 40);
     assert.ok(from <= current && current < to, `${current} of ${count} is in its own window`);
   }
+});
+
+test('a shuffled queue that repeats all is mixed again at the end, before it goes round, and never opens on the one just played', () => {
+  const films = Array.from({ length: 8 }, (_, i) => ({ ratingKey: String(i + 1), title: `Film ${i + 1}` }));
+  const atEnd = (options = {}) => withIndex(createQueue({ items: films, shuffle: true, repeat: 'all', id: 'q', ...options }), 7);
+  for (let round = 0; round < 200; round++) {
+    const queue = atEnd();
+    assert.equal(wrapsReshuffled(queue), true);
+    const again = reshuffledForRepeat(queue);
+    const justPlayed = queue.items[7].ratingKey;
+    assert.equal(again.index, 0, 'standing at the start of the new order');
+    assert.notEqual(again.items[0].ratingKey, justPlayed, 'never the one just played');
+    assert.deepEqual(again.items.map(item => item.ratingKey).sort(), films.map(item => item.ratingKey).sort(), 'every one, once');
+    assert.equal(again.id, 'q');
+    assert.equal(again.shuffled, true);
+    assert.equal(again.repeat, 'all');
+  }
+  // It mixes: not the same order every time round.
+  const orders = new Set(Array.from({ length: 30 }, () => reshuffledForRepeat(atEnd()).items.map(item => item.ratingKey).join()));
+  assert.ok(orders.size > 10, `${orders.size} different orders in 30 tries`);
+  // A fixed random that would put the one just played first still does not open on it.
+  const stubborn = reshuffledForRepeat(atEnd(), () => 0.999);
+  assert.notEqual(stubborn.items[0].ratingKey, atEnd().items[7].ratingKey);
+});
+
+test('only a shuffled queue repeating all at its end is mixed again; anything else is left as it was', () => {
+  const films = Array.from({ length: 6 }, (_, i) => ({ ratingKey: String(i + 1) }));
+  const make = options => createQueue({ items: films, id: 'q', ...options });
+  const same = queue => assert.equal(reshuffledForRepeat(queue), queue, 'the very same queue');
+  same(withIndex(make({ shuffle: false, repeat: 'all' }), 5));           // in order: goes round in the same order
+  same(withIndex(make({ shuffle: true, repeat: 'off' }), 5));            // does not repeat: it ends
+  same(withIndex(make({ shuffle: true, repeat: 'one' }), 5));            // repeats the one track
+  same(withIndex(make({ shuffle: true, repeat: 'all' }), 4));            // not at the end yet
+  same(withIndex(createQueue({ items: films.slice(0, 2), shuffle: true, repeat: 'all' }), 1)); // two: nothing to mix
+  assert.equal(wrapsReshuffled(withIndex(make({ shuffle: true, repeat: 'all' }), 5)), true);
+  assert.equal(wrapsReshuffled(withIndex(make({ shuffle: true, repeat: 'all' }), 3)), false);
+  // Turning shuffle off afterwards still puts the original order back, since each keeps its place in it.
+  const mixed = reshuffledForRepeat(withIndex(make({ shuffle: true, repeat: 'all' }), 5));
+  assert.deepEqual(unshuffleQueue(mixed).items.map(item => item.ratingKey), films.map(item => item.ratingKey));
 });

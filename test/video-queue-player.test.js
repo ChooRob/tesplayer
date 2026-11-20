@@ -215,3 +215,41 @@ test('the panel stays open from one film to the next, and Escape or the button c
   assert.equal(next.context.sessionStorage.getItem('freeStuffCrazyPlayer.queueOpen'), '0');
 });
 
+test('a shuffled queue that repeats goes round again in a new order, never opening on the film just played', async () => {
+  const films = Array.from({ length: 6 }, (_, at) => ({ ratingKey: String(200 + at), title: `Film ${at + 1}`, type: 'movie' }));
+  for (let round = 0; round < 40; round++) {
+    const storage = memoryStorage();
+    const queue = musicQueue.createQueue({ label: 'Movies', items: films, shuffle: true, repeat: 'all', id: 'q1' });
+    musicQueue.saveQueue(storage, musicQueue.withIndex(queue, 5));
+    const last = queue.items[5].ratingKey;
+    const page = started(`?key=${last}&videoQueue=q1`, storage, 'The last');
+    page.playNextEpisode({ auto: true });
+    await tick();
+    const target = page.replaced[0];
+    assert.notEqual(target.searchParams.get('key'), last, 'not the one just played');
+    const again = musicQueue.readQueue(storage, 'q1');
+    assert.equal(again.index, 0);
+    assert.equal(again.items[0].ratingKey, target.searchParams.get('key'), 'it opens on the first of the new order');
+    assert.deepEqual(again.items.map(item => item.ratingKey).sort(), films.map(item => item.ratingKey).sort());
+    assert.equal(again.shuffled, true);
+  }
+});
+
+test('an in-order queue that repeats goes round in the same order, and a shuffled one that does not repeat stops', async () => {
+  const films = Array.from({ length: 4 }, (_, at) => ({ ratingKey: String(300 + at), title: `Film ${at + 1}`, type: 'movie' }));
+  const storage = memoryStorage();
+  musicQueue.saveQueue(storage, musicQueue.withIndex(musicQueue.createQueue({ label: 'Movies', items: films, repeat: 'all', id: 'q1' }), 3));
+  const inOrder = started('?key=303&videoQueue=q1', storage, 'The last');
+  inOrder.playNextEpisode({ auto: true });
+  await tick();
+  assert.equal(inOrder.replaced[0].searchParams.get('key'), '300', 'back to the first');
+  assert.deepEqual(musicQueue.readQueue(storage, 'q1').items.map(item => item.ratingKey), ['300', '301', '302', '303'], 'the same order');
+
+  const stopped = memoryStorage();
+  const shuffled = musicQueue.createQueue({ label: 'Movies', items: films, shuffle: true, id: 'q2' });
+  musicQueue.saveQueue(stopped, musicQueue.withIndex(shuffled, 3));
+  const end = started(`?key=${shuffled.items[3].ratingKey}&videoQueue=q2`, stopped, 'The last');
+  end.playNextEpisode({ auto: true });
+  await tick();
+  assert.equal(end.replaced.length, 0, 'without repeat it ends');
+});
