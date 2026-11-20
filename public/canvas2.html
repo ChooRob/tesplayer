@@ -90,6 +90,15 @@
     .q.current .qNum svg { width: 20px; height: 20px; }
     .q.current .qArtist, .q.current .qLen { color: #b9d9ff; }
     #musicQueueEmpty { padding: 24px; color: #8a8d98; text-align: center; }
+    /* A queue of films: the same list as music's, over the right of the picture, above the controls. */
+    #videoQueue { position: fixed; z-index: 5; right: 12px; top: 64px; bottom: 124px; width: min(400px, 42vw); display: flex; flex-direction: column; min-height: 0; background: rgba(20, 20, 24, .92); border: 1px solid rgba(255, 255, 255, .1); border-radius: 14px; overflow: hidden; }
+    #videoQueue[hidden] { display: none; }
+    #videoQueueHead { padding: 14px 20px 10px; border-bottom: 1px solid rgba(255, 255, 255, .08); }
+    #videoQueueLabel { color: #8a8d98; font: 600 12px -apple-system, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; }
+    #videoQueueName { margin-top: 3px; color: #e8e8ea; font: 700 clamp(16px, 2.4vh, 20px) -apple-system, system-ui, sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #videoQueueList { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1; scrollbar-width: thin; }
+    #videoQueueList .q .qName { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    #videoQueueList .qNote { padding: 10px 14px; color: #8a8d98; text-align: center; font: 500 13px -apple-system, system-ui, sans-serif; }
     /* Lyrics take the cover's place: the cover shrinks to a small header above them and the tracks stay where they are. */
     #musicNowHead { display: flex; flex-direction: column; align-items: center; gap: 20px; max-width: 100%; }
     #musicLyrics { display: none; flex: 1; align-self: stretch; flex-direction: column; min-height: 0; background: rgba(255, 255, 255, .06); border-radius: 14px; overflow: hidden; pointer-events: auto; }
@@ -114,9 +123,9 @@
     #lyricLines.timed li.past { color: #6b6e78; }
     #lyricLines.timed li.active { color: #fff; }
     #lyricsMessage { padding: 28px 22px; color: #8a8d98; text-align: center; font: 500 16px -apple-system, system-ui, sans-serif; }
-    #lyricsBtn[hidden], #shuffleBtn[hidden], #repeatBtn[hidden] { display: none; }
+    #lyricsBtn[hidden], #shuffleBtn[hidden], #repeatBtn[hidden], #queueBtn[hidden] { display: none; }
     #shuffleBtn[aria-pressed="true"], #repeatBtn[aria-pressed="true"] { background: #0878e6; }
-    #lyricsBtn[aria-pressed="true"] { background: #0878e6; }
+    #lyricsBtn[aria-pressed="true"], #queueBtn[aria-pressed="true"] { background: #0878e6; }
     #prevTrackBtn[hidden], #nextTrackBtn[hidden] { display: none; }
     /* A tall or narrow screen puts the list under the cover. */
     @media (max-aspect-ratio: 1/1), (max-width: 800px) {
@@ -365,6 +374,7 @@
     /* Phones: keep the top bar on one line and clear of notches. */
     #topBar { top: max(16px, env(safe-area-inset-top)); left: max(16px, env(safe-area-inset-left)); right: max(16px, env(safe-area-inset-right)); }
     @media (max-width: 600px) {
+      #videoQueue { width: min(400px, calc(100vw - 24px)); }
       #topBar { gap: 6px; align-items: center; }
       #backLink, #topBarRight button, #watchedControls button {
         min-width: 44px; min-height: 44px; padding: 0 10px; font-size: 18px;
@@ -422,6 +432,10 @@
         </div>
       </div>
     </div>
+    <aside id="videoQueue" aria-label="Queue" hidden>
+      <div id="videoQueueHead"><div id="videoQueueLabel">Up next</div><div id="videoQueueName"></div></div>
+      <ol id="videoQueueList"></ol>
+    </aside>
     <div id="controls">
       <button id="prevTrackBtn" hidden title="Previous track" aria-label="Previous track"><span data-icon="skip-prev"></span></button>
       <button id="back30" title="Back 30s" aria-label="Back 30 seconds"><span data-icon="back" data-label="30"></span></button>
@@ -431,6 +445,7 @@
       <button id="shuffleBtn" hidden title="Shuffle" aria-label="Shuffle" aria-pressed="false"><span data-icon="shuffle"></span></button>
       <button id="repeatBtn" hidden title="Repeat: off" aria-label="Repeat: off" aria-pressed="false"><span data-icon="repeat"></span></button>
       <button id="lyricsBtn" hidden title="Lyrics" aria-label="Lyrics" aria-pressed="false"><span data-icon="lyrics"></span></button>
+      <button id="queueBtn" hidden title="Queue" aria-label="Queue" aria-pressed="false"><span data-icon="list"></span></button>
       <input id="seekBar" type="range" min="0" max="0" value="0" step="1" />
       <span id="timeLabel">00:00 / 00:00</span>
       <div id="dimPanel" role="group" aria-label="Adjustments" hidden>
@@ -575,7 +590,7 @@
     import { setupFullscreenButton } from '/fullscreen.js';
     import { parseVtt, pickTrack, preferenceFor, readPreference, writePreference, createCaptionLayer } from '/captions.js';
     import { hydrateIcons, iconEl, iconSvg } from '/icons.js';
-    import { readQueue, saveQueue, createQueue, positionOf, withIndex, visibleWindow, shuffleQueue, unshuffleQueue, nextPosition, nextRepeat, rollRadio } from '/music-queue.js';
+    import { readQueue, saveQueue, createQueue, positionOf, withIndex, visibleWindow, shuffleQueue, unshuffleQueue, nextPosition, nextRepeat, rollRadio, queueWindow } from '/music-queue.js';
     import { gatherRadio, RADIO_SIZE, RADIO_KEEP_PLAYED } from '/music-radio.js';
     import { activeLine } from '/lyrics-view.js';
     import { MUSIC_MESSAGE, fromParent, cleanCommand } from '/music-host.js';
@@ -1556,6 +1571,10 @@
         prevTrackBtn.hidden = false;
         nextTrackBtn.hidden = false;
         showVideoQueue();
+        queueBtn.hidden = false;
+        let wasOpen = false;
+        try { wasOpen = sessionStorage.getItem(QUEUE_OPEN_KEY) === '1'; } catch { /* closed */ }
+        if (wasOpen) toggleVideoQueue(true);
       }
       function showVideoQueue() {
         const at = nextPosition(withIndex(queueData, queueIndex), { auto: true });
@@ -1564,7 +1583,57 @@
         titleDisplayEl.textContent = `${queueData.shuffled ? 'Shuffled' : 'Playing'} · ${queueIndex + 1} of ${queue.length} · ${videoTitle}`;
         syncQueueButtons();
         updateNextButton();
+        if (!videoQueuePanel.hidden) renderVideoQueue(); // shuffle or unshuffle changes what it lists
       }
+      // The queue beside the picture: a window of 40 films around the one playing (the last few played, dimmed, behind it),
+      // however long the queue is. Tapping a film plays it. It stays open from film to film, each being a page of its own.
+      const QUEUE_OPEN_KEY = 'freeStuffCrazyPlayer.queueOpen';
+      const queueBtn = document.getElementById('queueBtn');
+      const videoQueuePanel = document.getElementById('videoQueue');
+      function renderVideoQueue() {
+        const list = document.getElementById('videoQueueList');
+        document.getElementById('videoQueueLabel').textContent = `${queueData.shuffled ? 'Shuffled' : 'Playing in order'} · ${queue.length} films`;
+        document.getElementById('videoQueueName').textContent = queueData.label || '';
+        const { from, to } = queueWindow(queue.length, queueIndex);
+        const note = (text) => { const li = document.createElement('li'); li.className = 'qNote'; li.textContent = text; return li; };
+        const rows = [];
+        if (from > 0) rows.push(note(`${from} earlier`));
+        queue.slice(from, to).forEach((film, offset) => {
+          const index = from + offset;
+          const item = document.createElement('li');
+          item.className = 'q' + (index === queueIndex ? ' current' : index < queueIndex ? ' played' : '');
+          const button = document.createElement('button');
+          button.type = 'button';
+          if (index === queueIndex) button.setAttribute('aria-current', 'true');
+          const number = document.createElement('span');
+          number.className = 'qNum';
+          if (index === queueIndex) number.append(iconEl('play')); else number.textContent = String(index + 1);
+          const name = document.createElement('span');
+          name.className = 'qName';
+          name.textContent = film.title || 'Video';
+          const length = document.createElement('span');
+          length.className = 'qLen';
+          length.textContent = film.durationMs ? clock(film.durationMs) : '';
+          button.append(number, name, length);
+          button.addEventListener('click', () => { if (index === queueIndex) toggleVideoQueue(false); else goToQueueIndex(index); });
+          item.append(button);
+          rows.push(item);
+        });
+        if (to < queue.length) rows.push(note(`${queue.length - to} more`));
+        list.replaceChildren(...rows);
+        list.querySelector('.current')?.scrollIntoView({ block: 'center' });
+      }
+      function toggleVideoQueue(open = videoQueuePanel.hidden) {
+        videoQueuePanel.hidden = !open;
+        queueBtn.setAttribute('aria-pressed', String(open));
+        // While it is open the controls stay up, so the button that closes it is there.
+        keepControlsUp = open;
+        showOverlay();
+        try { sessionStorage.setItem(QUEUE_OPEN_KEY, open ? '1' : '0'); } catch { /* not remembered */ }
+        if (open) renderVideoQueue();
+      }
+      queueBtn.addEventListener('click', () => toggleVideoQueue());
+      document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !videoQueuePanel.hidden) toggleVideoQueue(false); });
       shuffleBtn.addEventListener('click', () => { if (queueData) changeQueue(queueData.shuffled ? unshuffleQueue(withIndex(queueData, queueIndex)) : shuffleQueue(withIndex(queueData, queueIndex))); });
       repeatBtn.addEventListener('click', () => {
         if (!queueData) return;

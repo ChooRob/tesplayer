@@ -412,11 +412,13 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
     return `/api/library/thumb?${new URLSearchParams({ path: `${itemId}/${imageType}`, width: String(width), height: String(height) })}`;
   }
 
-  const TYPES = { Movie: 'movie', Series: 'show', Season: 'season', Episode: 'episode' };
+  // The libraries listed, by the server's type for them. Home videos and music videos are plain video files: films with
+  // little or no metadata, so they are "video" libraries, which is where Play and Shuffle are offered.
+  const LIBRARY_TYPES = { movies: 'movie', tvshows: 'show', homevideos: 'video', musicvideos: 'video' };
+  // A home video or a music video is a film as far as the pages go: a video, played from its start or where it was left.
+  const TYPES = { Movie: 'movie', Video: 'movie', MusicVideo: 'movie', Series: 'show', Season: 'season', Episode: 'episode' };
   const typeOf = item => TYPES[item.Type] || String(item.Type || '').toLowerCase();
   const viewOffset = item => ms(item.UserData?.PlaybackPositionTicks) || 0;
-  // Plex's field: times watched, 0 for unwatched. Played is what marking watched sets.
-  const viewCount = item => (item.UserData?.Played ? Math.max(1, item.UserData.PlayCount || 0) : 0);
   function episodeCounts(item) {
     const leafCount = item.RecursiveItemCount ?? item.ChildCount;
     if (!Number.isFinite(leafCount)) return {};
@@ -470,7 +472,6 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
       duration: minutes(item.RunTimeTicks),
       durationMs: ms(item.RunTimeTicks),
       viewOffset: viewOffset(item),
-      viewCount: viewCount(item),
       thumbnail: thumbnailUrl(item, 'Primary', 'landscape'),
     };
   }
@@ -487,8 +488,8 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
   async function libraries(credential) {
     const views = await api(`/Users/${credential.userId}/Views`, { credential });
     return (views.Items || [])
-      .filter(view => view.CollectionType === 'movies' || view.CollectionType === 'tvshows')
-      .map(view => ({ id: String(view.Id), title: view.Name, type: view.CollectionType === 'movies' ? 'movie' : 'show' }));
+      .filter(view => LIBRARY_TYPES[view.CollectionType])
+      .map(view => ({ id: String(view.Id), title: view.Name, type: LIBRARY_TYPES[view.CollectionType] }));
   }
 
   // An item's subtitle streams and the media source they belong to.
@@ -507,7 +508,7 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
     return {
       libraries: () => libraries(credential),
       async libraryItems(libraryId, { sort } = {}) {
-        const data = await userItems({ ParentId: libraryId, Recursive: 'true', IncludeItemTypes: 'Movie,Series', Fields: ITEM_FIELDS, ...sortParams(sort) });
+        const data = await userItems({ ParentId: libraryId, Recursive: 'true', IncludeItemTypes: 'Movie,Series,Video,MusicVideo', Fields: ITEM_FIELDS, ...sortParams(sort) });
         return { total: data.TotalRecordCount, items: (data.Items || []).map(mapListItem) };
       },
       async recentlyAdded(libraryId) {
@@ -585,7 +586,7 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
         return toWebVtt(await readSubtitleText(response));
       },
       async search(text) {
-        const data = await userItems({ SearchTerm: text, Recursive: 'true', IncludeItemTypes: 'Movie,Series,Episode', Limit: '30', Fields: ITEM_FIELDS });
+        const data = await userItems({ SearchTerm: text, Recursive: 'true', IncludeItemTypes: 'Movie,Series,Video,MusicVideo,Episode', Limit: '30', Fields: ITEM_FIELDS });
         return (data.Items || []).map(item => ({
           ratingKey: String(item.Id), title: item.Name, year: item.ProductionYear, type: typeOf(item),
           thumbnail: thumbnailUrl(item, 'Primary', 'poster'),

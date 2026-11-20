@@ -56,7 +56,7 @@ globalThis.fetch = async (value, options = {}) => {
   if (p === '/api/v2/user') return json({ id: 1, username: 'Owner', email: 'Owner@Example.test', confirmed: true });
   if (p === '/api/v2/resources') return json([{ clientIdentifier: 'test-server', provides: 'server', owned: true, accessToken: 'test-server-token' }]);
   if (p === '/accounts') return json({ MediaContainer: { Account: [{ id: 1, name: 'Owner' }] } });
-  if (p === '/library/sections') return json({ MediaContainer: { Directory: [{ key: '1', title: 'Movies', type: 'movie' }] } });
+  if (p === '/library/sections') return json({ MediaContainer: { Directory: [{ key: '1', title: 'Movies', type: 'movie', agent: 'tv.plex.agents.movie' }, { key: '4', title: 'Clips', type: 'movie', agent: 'tv.plex.agents.none' }, { key: '5', title: 'Old clips', type: 'movie', agent: 'com.plexapp.agents.none' }] } });
   if (p === '/library/metadata/5') return json({ MediaContainer: { Metadata: [{ ratingKey: '5', type: 'movie', title: 'Test Movie', year: 2020, duration: 100000, thumb: '/library/metadata/5/thumb/1' }] } });
   if (p === '/library/metadata/7') return json({ MediaContainer: { Metadata: [{ ratingKey: '7', type: 'track', title: 'A Song', index: 2, parentIndex: 1, parentKey: '/library/metadata/200', grandparentKey: '/library/metadata/100', parentTitle: 'An Album', grandparentTitle: 'An Artist', duration: 200000, thumb: '/library/metadata/7/thumb/1', Media: [{ Part: [{ Stream: [{ id: 70, streamType: 4, provider: 'com.plexapp.agents.lyricfind', timed: 1 }] }] }] }] } });
   if (p === '/library/streams/70') return new Response('<Lyrics><Line startOffset="2000"><Span>La la</Span></Line></Lyrics>');
@@ -77,10 +77,6 @@ globalThis.fetch = async (value, options = {}) => {
   }
   if (/^\/music\/:\/transcode\/universal\/session\/[^/]+\/base\/00000\.ts$/.test(p)) return new Response(new Uint8Array(188), { headers: { 'Content-Type': 'audio/mp2t' } });
   if (p === '/music/:/transcode/universal/stop') return new Response('');
-  if (p === '/library/metadata/300/children') return json({ MediaContainer: { Metadata: [
-    { ratingKey: '8', title: 'Pilot', parentIndex: 1, index: 1, viewCount: 2 },
-    { ratingKey: '9', title: 'Second', parentIndex: 1, index: 2 },
-  ] } });
   if (p === '/video/:/transcode/universal/decision') return json({ MediaContainer: {} });
   if (p === '/video/:/transcode/universal/start.m3u8') {
     const session = url.searchParams.get('session');
@@ -161,7 +157,8 @@ test('browsing, playback, the media proxy and watch state go through the Plex so
   const cookie = await signIn();
 
   const libraries = await request('/api/library/libraries', { cookie });
-  assert.deepEqual(libraries.json, [{ id: '1', title: 'Movies', type: 'movie' }]);
+  assert.deepEqual(libraries.json, [{ id: '1', title: 'Movies', type: 'movie' }, { id: '4', title: 'Clips', type: 'video' }, { id: '5', title: 'Old clips', type: 'video' }],
+    'a library with no metadata agent (Other Videos) is a video library; a movie library is not');
   const alias = await request('/api/plex/libraries', { cookie });
   assert.deepEqual(alias.json, libraries.json, 'the original /api/plex path still works');
   assert.equal((await request('/api/library/item/not-a-key', { cookie })).status, 400);
@@ -174,10 +171,6 @@ test('browsing, playback, the media proxy and watch state go through the Plex so
   assert.equal(thumb.headers['content-type'], 'image/jpeg');
   assert.equal(thumb.headers['cache-control'], 'private, max-age=86400', 'a picture is kept by the browser, not fetched again at every scroll');
   assert.match(thumb.headers.vary, /\bCookie\b/, 'and only for the session that fetched it');
-
-  const episodes = await request('/api/library/season/300/episodes', { cookie });
-  assert.deepEqual(episodes.json.map(episode => [episode.ratingKey, episode.viewCount]), [['8', 2], ['9', 0]],
-    'Play on a season starts after the last watched episode');
 
   const direct = await request('/api/playback/direct-capable', { cookie });
   assert.equal(typeof direct.json.capable, 'boolean');

@@ -70,9 +70,11 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
 
   async function libraries() {
     const data = await plexApi('/library/sections');
-    // Plex calls a music library "artist"; sources call it "music".
+    // Plex calls a music library "artist"; sources call it "music". An "Other Videos" library is a film
+    // library that uses no metadata agent (YouTube downloads, home videos): sources call it "video".
+    const typeOf = (d) => (d.type === 'artist' ? 'music' : d.type === 'movie' && /\.none$/.test(d.agent || '') ? 'video' : d.type);
     return data.MediaContainer.Directory.map((d) => ({
-      id: d.key, title: d.title, type: d.type === 'artist' ? 'music' : d.type,
+      id: d.key, title: d.title, type: typeOf(d),
       // Ways to list a library besides its default (the first): see "Music" in PLUGIN_DEVELOPMENT.md.
       ...(d.type === 'artist' ? { views: MUSIC_VIEWS } : {}),
     }));
@@ -151,7 +153,6 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
       duration: m.duration ? Math.round(m.duration / 60000) : null,
       durationMs: m.duration || null,
       viewOffset: m.viewOffset || 0,
-      viewCount: m.viewCount || 0,
       thumbnail: thumbnailProxyUrl(m.thumb, 'landscape'),
       videoCodec: media?.videoCodec,
     };

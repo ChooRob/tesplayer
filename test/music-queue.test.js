@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createQueue, shuffled, saveQueue, readQueue, positionOf, visibleWindow, withIndex, trackSummary, MAX_QUEUE } from '../public/music-queue.js';
+import { createQueue, shuffled, saveQueue, readQueue, positionOf, visibleWindow, withIndex, trackSummary, MAX_QUEUE, isResumable, queueWindow, QUEUE_WINDOW } from '../public/music-queue.js';
 
 const tracks = n => Array.from({ length: n }, (_, i) => ({ ratingKey: i + 1, title: `Song ${i + 1}`, artist: 'A', album: 'B', durationMs: 1000 * (i + 1), episode: i + 1, season: 1, thumbnail: '/t', junk: 'dropped' }));
 const memory = () => { const data = new Map(); return { getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value), removeItem: key => data.delete(key) }; };
@@ -171,4 +171,27 @@ test('a radio rolls along: the played drop from the front but the last few stay,
   // Only what fits is taken from the pool.
   assert.equal(rollRadio(withIndex(start, 4), pool, opts).items.length, 8);
   assert.deepEqual(rollRadio(withIndex(start, 4), pool, opts).items.slice(-1).map(item => item.ratingKey), ['p1']);
+});
+
+test('a film or episode is resumed only when it was begun and is not nearly over', () => {
+  const film = fields => ({ durationMs: 1800000, viewOffset: 0, ...fields });
+  assert.equal(isResumable(film({ viewOffset: 600000 })), true);
+  assert.equal(isResumable(film({ viewOffset: 3000 })), false, 'a few seconds in is not begun');
+  assert.equal(isResumable(film({ viewOffset: 1790000 })), false, 'the credits are as good as finished');
+  assert.equal(isResumable(film({ viewOffset: 600000, durationMs: 0 })), false, 'no length known');
+});
+
+test('the panel beside a film lists a window of 40: the one playing, the last 10 before it, and the rest ahead', () => {
+  assert.equal(QUEUE_WINDOW, 40);
+  assert.deepEqual(queueWindow(646, 0), { from: 0, to: 40 }, 'at the start: the first 40');
+  assert.deepEqual(queueWindow(646, 5), { from: 0, to: 40 }, 'fewer than 10 played: from the top');
+  assert.deepEqual(queueWindow(646, 24), { from: 14, to: 54 }, 'in the middle: 10 before, the film, 29 after');
+  assert.deepEqual(queueWindow(646, 645), { from: 606, to: 646 }, 'at the end the window shifts to still hold 40');
+  assert.deepEqual(queueWindow(12, 5), { from: 0, to: 12 }, 'a short queue is all of it');
+  assert.deepEqual(queueWindow(0, 0), { from: 0, to: 0 });
+  for (const [count, current] of [[100, 50], [100, 99], [41, 0], [41, 40]]) {
+    const { from, to } = queueWindow(count, current);
+    assert.equal(to - from, 40);
+    assert.ok(from <= current && current < to, `${current} of ${count} is in its own window`);
+  }
 });

@@ -54,7 +54,7 @@ dependencies. Do not treat `npm audit` as a license audit.
 ## Icons
 
 The icon shapes in `public/icons.js` (play, pause, replay, forward, check,
-settings, arrows, chevrons, fullscreen, volume and lock) are adapted from
+settings, arrows, chevrons, fullscreen, volume, lock and list) are adapted from
 [Material Design icons](https://github.com/google/material-design-icons),
 Copyright Google LLC, licensed under the
 [Apache License 2.0](licenses/Apache-2.0.txt). They are combined into one module

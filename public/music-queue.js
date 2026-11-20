@@ -105,6 +105,18 @@ export function visibleWindow(count, current, { before = 20, after = 200 } = {})
 
 export const withIndex = (queue, index) => ({ ...queue, index });
 
+// The films of a queue the panel beside the picture lists: `size` of them (40), the playing one with the last few played
+// behind it and the rest ahead, however long the queue is. Near either end the window shifts to still hold `size`.
+export const QUEUE_WINDOW = 40;
+export const QUEUE_WINDOW_BEHIND = 10;
+export function queueWindow(count, current, { size = QUEUE_WINDOW, behind = QUEUE_WINDOW_BEHIND } = {}) {
+  const from = Math.max(0, Math.min(current - behind, count - size));
+  return { from, to: Math.min(count, from + size) };
+}
+
+// Begun and not nearly finished: such a film or episode resumes where it was left.
+export const isResumable = item => item.viewOffset > 5000 && item.durationMs > 0 && item.viewOffset < item.durationMs - 30000;
+
 // More tracks on the end (a radio topping itself up), each remembering its place in the order. A track
 // already in the queue is not added again unless `allowRepeats` (a small library that has run out).
 export function appendTracks(queue, tracks, { allowRepeats = false, limit = Infinity } = {}) {
