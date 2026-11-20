@@ -148,7 +148,9 @@ test('libraries and items are shaped like the other sources', async () => {
 });
 
 test('thumbnails are fetched for valid image requests only', async () => {
-  assert.equal((await send('/thumb?path=909%2FPrimary&width=300&height=450')).status, 200);
+  const thumb = await send('/thumb?path=909%2FPrimary&width=300&height=450');
+  assert.equal(thumb.status, 200);
+  assert.match(thumb.headers.get('vary') || '', /\bCookie\b/, 'a kept picture belongs to the session that fetched it');
   assert.equal(calls.findLast(call => call.path === '/Items/909/Images/Primary').headers['X-Emby-Token'], TOKEN);
   for (const bad of ['path=../x%2FPrimary', 'path=909%2FLogo', 'path=909%2FPrimary&width=9999']) assert.equal((await send(`/thumb?${bad}`)).status, 400, bad);
 });

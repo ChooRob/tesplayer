@@ -138,3 +138,29 @@ test('restarting the keep-alive clip reloads and plays it again', () => {
   assert.deepEqual(clip.events, ['pause', 'load', 'play']);
   controls.dispose();
 });
+
+test('the Pause the car sends right after Next or Previous is ignored, a later one still pauses', () => {
+  let clock = 1000;
+  const calls = [];
+  const actions = {
+    play: () => calls.push('play'), pause: () => calls.push('pause'),
+    seekBy: () => calls.push('seek'), seekTo: () => {},
+    nextTrack: () => { calls.push('next'); return true; },
+    previousTrack: () => { calls.push('previous'); return true; },
+  };
+  const session = fakeSession();
+  const counted = [];
+  createMediaSession({ actions, mediaSession: session, now: () => clock, onAction: name => counted.push(name) });
+  session.handlers.nexttrack();
+  clock += 100;
+  session.handlers.pause();
+  clock += 5000;
+  session.handlers.previoustrack();
+  clock += 100;
+  session.handlers.pause();
+  assert.deepEqual(calls, ['next', 'previous'], 'neither Pause stopped the music');
+  assert.deepEqual(counted, ['nexttrack', 'pause', 'previoustrack', 'pause'], 'the diagnostics still count them');
+  clock += 5000;
+  session.handlers.pause();
+  assert.deepEqual(calls.slice(-1), ['pause'], 'a Pause on its own still pauses');
+});

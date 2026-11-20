@@ -410,6 +410,15 @@ export function createPlexAuth({ owner, clientId, productName, plugins = [], sto
     return session.accountToken ? crypto.createHash('sha256').update(session.accountToken).digest('hex') : null;
   }
 
+  // The same grouping as getSessionAccountKey, but only from what the session cookie carries, so it never asks
+  // plex.tv and gives the same answer every time (for keeping a person's browser-side state apart).
+  function getSessionScopeKey(req) {
+    const session = getSession(req);
+    if (!session) return null;
+    if (session.accountId) return `plex:${session.accountId}`;
+    return session.accountToken ? crypto.createHash('sha256').update(session.accountToken).digest('hex') : null;
+  }
+
   const lookupIdentity = createPlexIdentityLookup({ headers: plexTvHeaders() });
   // onAccount records accounts for the admin account search; plugins that
   // predate it may still observe them through observePlexAccount.
@@ -517,7 +526,7 @@ export function createPlexAuth({ owner, clientId, productName, plugins = [], sto
     listServersForSession, switchServerForSession, getSessionServer,
     listHomeUsers, switchHomeUser, getSessionUser, getSessionPlexToken,
     listHomeUsersForSession, switchUserForSession, getSessionProfileId, getSessionIsAdmin,
-    getSessionPlexUrl, getSessionAccountKey, getSessionAccountId, getSessionIdentity, getSessionMachineIdentifier, getMachineIdentifier,
+    getSessionPlexUrl, getSessionAccountKey, getSessionScopeKey, getSessionAccountId, getSessionIdentity, getSessionMachineIdentifier, getMachineIdentifier,
     identityForToken,
   };
 }

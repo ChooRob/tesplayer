@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { createLoginTransactions, parseCookies, rateLimit, sameOriginRequests, securityHeaders, avatarUrl, fetchAvatar, mediaProxyPath, safeError } from '../security.js';
+import { createLoginTransactions, parseCookies, rateLimit, readBodyText, sameOriginRequests, securityHeaders, avatarUrl, fetchAvatar, mediaProxyPath, safeError } from '../security.js';
 import { safeReturnPath } from '../public/safe-navigation.js';
 import { renderMetadata } from '../public/metadata.js';
 import { resolveAccountId, authorizedNextUp } from '../profile-identity.js';
@@ -76,7 +76,14 @@ test('CSP permits exact app scripts, local canvas workers, and no inline event h
   for (const match of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)) {
     if (match[1].trim()) assert.ok(policy.includes(crypto.createHash('sha256').update(match[1]).digest('base64')));
   }
-  assert.equal(headers['X-Frame-Options'], 'DENY');
+  assert.equal(headers['X-Frame-Options'], 'SAMEORIGIN', 'the browse page holds the music player in a frame');
+  assert.match(policy, /frame-ancestors 'self'/);
+  for (const page of ['/browse', '/login', '/detail']) {
+    const other = cspFor(page);
+    assert.equal(other['X-Frame-Options'], 'DENY', `${page} cannot be framed`);
+    assert.match(other['Content-Security-Policy'], /frame-ancestors 'none'/, page);
+  }
+  assert.equal(cspFor('/api/library/libraries')['X-Frame-Options'], 'DENY');
   assert.ok(headers['Strict-Transport-Security']);
 });
 
@@ -215,4 +222,78 @@ test('player CSP isolates tenant origins and forbids caching personalized pages'
   for (const origin of ['', 'http://insecure.example', 'https://user:password@plex.example', "https://plex.example/;connect-src *", 'https://plex.example/?token=secret']) {
     assert.match(headersFor(origin)['Content-Security-Policy'], /connect-src 'self';/);
   }
+});
+
+test('a full rate limiter drops its oldest address instead of refusing new ones', () => {
+  let time = 0; let status; let allowed = 0;
+  const limit = rateLimit({ maximum: 2, windowMs: 1000, now: () => time, maxKeys: 3 });
+  const res = { set() {}, status(code) { status = code; return this; }, json() {} };
+  const hit = ip => { status = undefined; limit({ ip }, res, () => allowed++); return status; };
+  // Fill it with live addresses, then keep arriving: nobody is locked out.
+  for (const [at, ip] of [[0, 'a'], [1, 'b'], [2, 'c'], [3, 'd'], [4, 'e'], [5, 'f']]) { time = at; assert.equal(hit(ip), undefined, ip); }
+  assert.equal(allowed, 6);
+  // 'a' was dropped to make room, so it starts a fresh count; an address still held keeps its own.
+  time = 6; assert.equal(hit('a'), undefined);
+  time = 7; hit('f'); assert.equal(hit('f'), 429, 'a held address is still limited');
+});
+
+test('the rate limiter forgets expired addresses from the oldest end', () => {
+  let time = 0; let status;
+  const limit = rateLimit({ maximum: 1, windowMs: 100, now: () => time, maxKeys: 2 });
+  const res = { set() {}, status(code) { status = code; return this; }, json() {} };
+  const hit = ip => { status = undefined; limit({ ip }, res, () => {}); return status; };
+  hit('a'); time = 50; hit('b');
+  time = 120; assert.equal(hit('a'), undefined, 'a expired');
+  assert.equal(hit('b'), 429, 'b has not');
+  time = 151; assert.equal(hit('b'), undefined, 'now b has too');
+});
+
+function bodyOf(chunks, headers = {}) {
+  let sent = 0;
+  let cancelled = false;
+  const stream = new ReadableStream({
+    pull(controller) { if (sent < chunks.length) controller.enqueue(chunks[sent++]); else controller.close(); },
+    cancel() { cancelled = true; },
+  });
+  return { response: new Response(stream, { headers }), sent: () => sent, cancelled: () => cancelled };
+}
+
+test('a response body is read up to its limit and no further', async () => {
+  const text = new TextEncoder().encode('{"ok":true}');
+  assert.equal(await readBodyText(bodyOf([text]).response, 64), '{"ok":true}');
+  assert.equal(await readBodyText(new Response(null, { status: 204 }), 64), '');
+  // A multi-byte character split across chunks is decoded whole.
+  const euro = new TextEncoder().encode('€');
+  assert.equal(await readBodyText(bodyOf([euro.slice(0, 1), euro.slice(1)]).response, 64), '€');
+
+  // Too large by its own header: refused before reading any of it.
+  const declared = bodyOf([text], { 'content-length': '5000' });
+  await assert.rejects(readBodyText(declared.response, 64), { code: 'RESPONSE_TOO_LARGE' });
+  assert.equal(declared.sent(), 0);
+
+  // No header, or a false one, and an endless body: reading stops past the limit and the body is cancelled.
+  const endless = bodyOf(Array.from({ length: 10_000 }, () => new Uint8Array(1024)), { 'content-length': '10' });
+  await assert.rejects(readBodyText(endless.response, 4096), { code: 'RESPONSE_TOO_LARGE' });
+  assert.ok(endless.sent() < 20, `read ${endless.sent()} chunks of 10000`);
+  assert.ok(endless.cancelled());
+});
+
+test('a GET that starts playback needs an explicit same-origin signal', () => {
+  const guard = sameOriginRequests('https://app.example', new Set(['/api/start']));
+  const run = (path, headers, method = 'GET') => {
+    let status = 200;
+    guard({ method, path, get: key => headers[key] }, { status(code) { status = code; return this; }, json() {} }, () => {});
+    return status;
+  };
+  // A browser that sends neither Origin nor Fetch Metadata gives no sign of where the request came from.
+  assert.equal(run('/api/start', {}), 403);
+  assert.equal(run('/api/start', { 'sec-fetch-site': 'none' }), 403, 'typed or bookmarked');
+  assert.equal(run('/api/start', { 'sec-fetch-site': 'cross-site' }), 403);
+  assert.equal(run('/api/start', { 'sec-fetch-site': 'same-origin' }), 200);
+  assert.equal(run('/api/start', { origin: 'https://app.example' }), 200);
+  assert.equal(run('/api/start', { origin: 'https://evil.example', 'sec-fetch-site': 'same-origin' }), 403);
+  assert.equal(run('/api/start', { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate' }), 403);
+  // Pages and other reads are untouched.
+  assert.equal(run('/canvas2', {}), 200);
+  assert.equal(run('/api/library/libraries', {}), 200);
 });

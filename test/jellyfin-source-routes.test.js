@@ -194,6 +194,18 @@ test('browsing returns the same shapes the pages already use for Plex', async ()
   assert.deepEqual((await request('/api/library/libraries', { cookie })).json,
     [{ id: LIB, title: 'Movies', type: 'movie' }, { id: SHOWS, title: 'Shows', type: 'show' }]);
   const { items } = (await request(`/api/library/library/${LIB}?sort=titleSort`, { cookie })).json;
+  // A source without playlists, similar artists or lyrics answers with none, not an error.
+  assert.deepEqual((await request('/api/library/playlists', { cookie })).json, []);
+  assert.deepEqual((await request(`/api/library/similar/${MOVIE}`, { cookie })).json, { sections: [] });
+  assert.deepEqual((await request(`/api/library/lyrics/${MOVIE}`, { cookie })).json, { tracks: [] });
+  assert.deepEqual((await request(`/api/library/popular/${MOVIE}`, { cookie })).json, []);
+  assert.deepEqual((await request(`/api/library/similar-tracks/${MOVIE}`, { cookie })).json, []);
+  // A source that cannot list by view or in pages answers as before, and junk in those fields is ignored.
+  for (const extra of ['&view=albums&start=0&size=500', '&view=%3Cscript%3E&start=-1&size=abc', '&size=99999']) {
+    const same = await request(`/api/library/library/${LIB}?sort=titleSort${extra}`, { cookie });
+    assert.equal(same.status, 200, extra);
+    assert.deepEqual(same.json.items.map(item => item.ratingKey), items.map(item => item.ratingKey), extra);
+  }
   assert.equal(items[0].ratingKey, MOVIE);
   assert.equal(items[0].viewOffset, 90_000);
   assert.equal(items[0].durationMs, 3_600_000);
@@ -204,6 +216,7 @@ test('browsing returns the same shapes the pages already use for Plex', async ()
   const thumb = await request(items[0].thumbnail, { cookie });
   assert.equal(thumb.status, 200);
   assert.equal(thumb.headers['content-type'], 'image/jpeg');
+  assert.match(thumb.headers.vary, /\bCookie\b/, 'a kept picture belongs to the session that fetched it');
   assert.equal((await request('/api/library/thumb?path=../../etc/Primary', { cookie })).status, 400);
 
   const details = (await request(`/api/library/item/${MOVIE}`, { cookie })).json;

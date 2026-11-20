@@ -1,6 +1,7 @@
 // Server-clock accounting shared by live streams and Plex. Heartbeats report only
 // playback state; media positions and seeks never determine time charged.
 // getStreamLimit returns a positive per-account cap; anything else means unlimited.
+// recordUsage(accountKey, seconds, { kind }) says whether the time was 'music' or 'video'.
 // A new playback sends its first heartbeat only once the player has loaded,
 // which on a slow device (or a resume deep into a file) can take longer than
 // leaseMs. Until that first heartbeat it has startupMs before it can expire.
@@ -25,7 +26,7 @@ export function createWatchTimeMeter({recordUsage,getQuotaStatus,getStreamLimit=
     const end=Math.min(now(),entry.seenAt+leaseMs);
     const seconds=entry.state==='playing'?Math.max(0,end-entry.chargedAt)/1000:0;
     entry.chargedAt=now();
-    if(seconds>0)await recordUsage(entry.accountKey,seconds);
+    if(seconds>0)await recordUsage(entry.accountKey,seconds,{kind:entry.kind});
     const quota=await getQuotaStatus(entry.accountKey);
     if(quota && quota.remainingSeconds<=0 && !entry.exhausted) {
       entry.exhausted=true;entry.state='stopped';
@@ -36,7 +37,8 @@ export function createWatchTimeMeter({recordUsage,getQuotaStatus,getStreamLimit=
     }
     return quota;
   }
-  async function begin({viewer,accountKey,playbackId,onExhausted,onExpired}) {
+  // kind says what is being watched: 'music', or 'video' (movies, shows and live TV, the default).
+  async function begin({viewer,accountKey,playbackId,kind='video',onExhausted,onExpired}) {
     if(!viewer || !accountKey)return;
     let old=viewers.get(viewer);
     if(old)await settle(old);
@@ -48,7 +50,7 @@ export function createWatchTimeMeter({recordUsage,getQuotaStatus,getStreamLimit=
       error.code = 'ACCOUNT_STREAM_LIMIT';
       throw error;
     }
-    if(old?.playbackId===playbackId){old.onExhausted=onExhausted;old.onExpired=onExpired;old.expired=false;old.seenAt=now();old.chargedAt=now();old.startupUntil=now()+startupMs;old.state='paused';return;}
+    if(old?.playbackId===playbackId){old.onExhausted=onExhausted;old.onExpired=onExpired;old.kind=kind;old.expired=false;old.seenAt=now();old.chargedAt=now();old.startupUntil=now()+startupMs;old.state='paused';return;}
     if(viewers.size>=maximum && !old) {
       const stale=[...viewers].find(([,entry])=>liveUntil(entry)<now());
       if(stale)viewers.delete(stale[0]);else throw Error('Watch-time tracking capacity reached');
@@ -56,8 +58,13 @@ export function createWatchTimeMeter({recordUsage,getQuotaStatus,getStreamLimit=
     // Safari can send a heartbeat while /api/start is still pending.
     // Only IDs that actually owned playback can have been replaced.
     const previousIds = old ? [...old.previousIds, old.playbackId].slice(-16) : [];
-    viewers.set(viewer,{accountKey,playbackId,previousIds,onExhausted,onExpired,expired:false,state:'paused',chargedAt:now(),seenAt:now(),startupUntil:now()+startupMs,exhausted:false});
+    viewers.set(viewer,{accountKey,playbackId,kind,previousIds,onExhausted,onExpired,expired:false,state:'paused',chargedAt:now(),seenAt:now(),startupUntil:now()+startupMs,exhausted:false});
     return { replaced: !!old };
+  }
+  // What a playback turned out to be, once it has started (the media server says whether an item is music).
+  function setKind(viewer,playbackId,kind) {
+    const entry=viewers.get(viewer);
+    if(entry && entry.playbackId===playbackId)entry.kind=kind;
   }
   async function heartbeat(viewer,playbackId,state) {
     const entry=viewers.get(viewer);
@@ -83,5 +90,5 @@ export function createWatchTimeMeter({recordUsage,getQuotaStatus,getStreamLimit=
       .filter(entry=>entry.state==='playing' && !entry.exhausted && !entry.expired && now()<=liveUntil(entry))
       .map(entry=>({accountKey:entry.accountKey}));
   }
-  return {begin,heartbeat,tick,stop,close,atStreamLimit,activeStreams};
+  return {begin,setKind,heartbeat,tick,stop,close,atStreamLimit,activeStreams};
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { nextEpisodeAfter, showIdFromKey } from '../next-episode.js';
+import { nextEpisodeAfter, nextTrackAfter, showIdFromKey } from '../next-episode.js';
 
 const show = [
   { ratingKey: 1, title: 'Special', season: 0, episode: 1 },
@@ -36,4 +36,18 @@ test('a show id comes out of a Plex key path or a plain Jellyfin id', () => {
   assert.equal(showIdFromKey('abc123def'), 'abc123def');
   assert.equal(showIdFromKey(null), null);
   assert.equal(showIdFromKey('/'), null);
+});
+
+test('the next track is simply the next one on the album, disc zero or not', () => {
+  const album = [
+    { ratingKey: 10, title: 'One', season: 0, episode: 1 },
+    { ratingKey: 11, title: 'Two', season: 0, episode: 2 },
+    { ratingKey: 12, title: 'Three', season: 1, episode: 1 },
+  ];
+  // Unlike episodes, nothing is skipped: a track on "disc 0" is still a track.
+  assert.deepEqual(nextTrackAfter(album, 10), { ratingKey: '11', title: 'Two', season: 0, episode: 2 });
+  assert.deepEqual(nextTrackAfter(album, '11'), { ratingKey: '12', title: 'Three', season: 1, episode: 1 });
+  assert.equal(nextTrackAfter(album, 12), null, 'the last track has none');
+  assert.equal(nextTrackAfter(album, 99), null);
+  assert.equal(nextTrackAfter(null, 1), null);
 });

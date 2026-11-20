@@ -20,6 +20,20 @@
 //   accounts                       -- search(query), describe(key) for admin
 //                                     pages; see accounts.js
 //
+// Music uses the same calls, so the browse pages need nothing source-specific: a library of
+// type 'music' lists items of type 'artist'; showSeasons(artistId) returns the artist's albums
+// (type 'album', with showRatingKey and showTitle naming the artist); seasonEpisodes(albumId)
+// returns the album's tracks (type 'track', with `episode` the track number, `season` the disc,
+// `artist`, `album`, durationMs). Artwork is square. A track is played like any item: playback.start
+// answers with an HLS playlist, here audio only. A library may list `views` (artists, albums, tracks) and
+// libraryItems takes { sort, view, start, size }; sources that cannot page just answer with everything. Optional
+// playlists() -> [{ ratingKey, type: 'playlist', title, thumbnail, leafCount }], playlistItems(id) -> tracks, and
+// similarArtists(artistId) -> [{ title, items: [artist items] }], popularTracks(artistId) -> tracks and
+// similarTracks(trackId) -> tracks that sound like it (nearest first) list playlists,
+// artists like an artist and an artist's most played tracks;
+// lyricTracks(trackId) -> [{ id, label, timed }] and lyricText(trackId, id) -> { timed, lines: [{ startMs, text }] }
+// (see lyrics.js for the parsers) give a track's lyrics. See "Music" in PLUGIN_DEVELOPMENT.md.
+//
 // Plugins add backend types by exporting
 //   sources: { <type>: { configure(env, { plugins }), warnings?(env), create(args) } }
 // Plex, Jellyfin and Emby are exported the same way, by bundled-sources.js, and always loaded.

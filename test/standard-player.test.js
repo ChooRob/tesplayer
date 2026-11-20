@@ -103,7 +103,7 @@ test('VOD loading falls back once on direct failure and propagates proxy failure
   for (const mode of ['success', 'direct-fails', 'both-fail', 'forced-proxy']) {
     const urls = [];
     const context = {
-      startUrl: '/api/start?key=123', readAheadSeconds: 60, startTime: 0, directAttempt: mode !== 'forced-proxy', vodLoading: true,
+      startUrl: '/api/start?key=123', readAheadSeconds: 60, readAheadParallelism: undefined, startTime: 0, directAttempt: mode !== 'forced-proxy', vodLoading: true,
       showBanner() {}, rejectBlockedPlayback: async () => false,
       selection: { mode: 'standard' }, document: { getElementById: () => ({}) },
       player: { async load(url) {

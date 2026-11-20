@@ -135,3 +135,29 @@ test('activeStreams lists only streams that are playing right now, by account', 
   time += 60000;
   assert.deepEqual(meter.activeStreams(), [], 'a stream whose heartbeats stopped is no longer counted');
 });
+
+test('usage says whether the time was music or video, and a playback is video until the media server says otherwise', async () => {
+  let time = 0;
+  const recorded = [];
+  const meter = createWatchTimeMeter({ now: () => time, recordUsage: async (key, seconds, detail) => { recorded.push([key, seconds, detail]); }, getQuotaStatus: async () => ({ remainingSeconds: 1000 }) });
+  await meter.begin({ viewer: 'v', accountKey: 'plex:1', playbackId: 'movie' });
+  await meter.heartbeat('v', 'movie', 'playing');
+  time += 4000; await meter.tick();
+  await meter.begin({ viewer: 'v', accountKey: 'plex:1', playbackId: 'song' });
+  meter.setKind('v', 'song', 'music');
+  await meter.heartbeat('v', 'song', 'playing');
+  time += 6000; await meter.tick();
+  assert.deepEqual(recorded, [['plex:1', 4, { kind: 'video' }], ['plex:1', 6, { kind: 'music' }]]);
+});
+
+test('a stale or unknown playback cannot change what a stream is counted as', async () => {
+  let time = 0;
+  const recorded = [];
+  const meter = createWatchTimeMeter({ now: () => time, recordUsage: async (key, seconds, detail) => { recorded.push(detail.kind); }, getQuotaStatus: async () => ({ remainingSeconds: 1000 }) });
+  await meter.begin({ viewer: 'v', accountKey: 'a', playbackId: 'new' });
+  meter.setKind('v', 'old-id', 'music');
+  meter.setKind('nobody', 'new', 'music');
+  await meter.heartbeat('v', 'new', 'playing');
+  time += 3000; await meter.tick();
+  assert.deepEqual(recorded, ['video']);
+});

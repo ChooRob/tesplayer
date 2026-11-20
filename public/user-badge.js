@@ -1,3 +1,5 @@
+import { clearSavedMusic } from '/saved-music.js';
+
 import { iconEl } from './icons.js';
 // Mount a profile badge and switcher in the toolbar.
 // The server-held account token allows switching without another login.
@@ -235,6 +237,7 @@ function openSwitchUserOverlay({ adminAvailable, profiles = true, title: userTit
     status.style.color = '#999';
     try {
       await fetch('/api/auth/logout', { method: 'POST' });
+      clearSavedMusic(); // the music kept for reopening the app is this person's, and they have left
       location.href = '/login.html';
     } catch (err) {
       status.textContent = `Logout failed: ${err.message}`;
@@ -263,6 +266,7 @@ function openSwitchUserOverlay({ adminAvailable, profiles = true, title: userTit
       const res = await fetch('/api/auth/logout-everywhere', { method: 'POST' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok && res.status !== 401) throw new Error(data.error || `HTTP ${res.status}`);
+      clearSavedMusic();
       location.href = '/login.html';
     } catch (err) {
       confirmTimer = null;
@@ -288,6 +292,7 @@ function openSwitchUserOverlay({ adminAvailable, profiles = true, title: userTit
       });
       const data = await res.json();
       if (data.ok) {
+        clearSavedMusic(); // another profile: not the music the last one had on
         location.reload();
       } else {
         status.textContent = data.error || 'Switch failed';

@@ -177,11 +177,11 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
 
   // ---- Playback -----------------------------------------------------------
 
-  async function stopTranscode({ sessionId, token, plexUrl = owner.url }) {
+  async function stopTranscode({ sessionId, token, plexUrl = owner.url, kind = 'video' }) {
     if (!sessionId) return;
     const params = new URLSearchParams({ session: sessionId });
     try {
-      await fetch(`${plexUrl}/video/:/transcode/universal/stop?${params}`, {
+      await fetch(`${plexUrl}/${kind === 'music' ? 'music' : 'video'}/:/transcode/universal/stop?${params}`, {
         headers: plexHeaders(token), redirect: 'error',
         signal: AbortSignal.timeout(5000),
       });
@@ -226,16 +226,45 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
     });
   }
 
+  // A track is transcoded by Plex's music endpoint, which wants a bitrate and a profile that
+  // allows audio-only HLS (the same request Plex Web makes). The tier sets how much to send.
+  // Always 48 kHz: a car's audio hardware runs at 48 kHz, and a 44.1 kHz stream is resampled live by
+  // its slow browser, which stutters (MCU2). Plex does the conversion instead.
+  const MUSIC_BITRATE_KBPS = { ultra: 320, high: 256, medium: 192, low: 128 };
+  function plexMusicParams(path, session, quality = 'high') {
+    return new URLSearchParams({
+      hasMDE: '1',
+      path,
+      mediaIndex: '0',
+      partIndex: '0',
+      protocol: 'hls',
+      directPlay: '0',
+      directStream: '0',
+      directStreamAudio: '0',
+      musicBitrate: String(MUSIC_BITRATE_KBPS[normalizeQuality(quality)]),
+      mediaBufferSize: '12288',
+      session,
+      'X-Plex-Client-Profile-Extra': 'add-transcode-target(type=musicProfile&context=streaming&protocol=hls&container=mpegts&audioCodec=aac)+add-limitation(scope=musicCodec&scopeName=aac&type=match&name=audio.samplingRate&list=48000&replaceAudioCodec=aac)',
+    });
+  }
+
   // Runs the decision call Plex needs before start.m3u8 will serve a
   // playlist, then proxies that playlist back with its URIs rewritten through /proxy/.
   async function startStream(req, res, { itemId, state, stopState }) {
     const token = tokenForRequest(req);
     const plexUrl = urlForRequest(req);
     const sessionId = crypto.randomUUID();
+    const timing = { startedAt: performance.now(), details: 0, decision: 0, playlist: 0 };
     const subtitle = typeof req.query.subtitle === 'string' && TRACK_ID.test(req.query.subtitle) ? req.query.subtitle : null;
-    const params = plexTranscodeParams(`/library/metadata/${itemId}`, sessionId, qualityTierFor(req.query.quality), subtitle);
+    // A track is not a video: Plex plays it through its music transcoder. Which one is asked of the item
+    // itself; if that cannot be read, it is treated as video, as before.
+    const kind = (await libraryFor(token, plexUrl).itemDetails(itemId).catch(() => null))?.type === 'track' ? 'music' : 'video';
+    timing.details = performance.now();
+    const params = kind === 'music'
+      ? plexMusicParams(`/library/metadata/${itemId}`, sessionId, qualityTierFor(req.query.quality))
+      : plexTranscodeParams(`/library/metadata/${itemId}`, sessionId, qualityTierFor(req.query.quality), subtitle);
 
-    const decisionRes = await fetch(`${plexUrl}/video/:/transcode/universal/decision?${params}`, {
+    const decisionRes = await fetch(`${plexUrl}/${kind}/:/transcode/universal/decision?${params}`, {
       headers: { ...plexHeaders(token), Accept: 'application/json' },
       signal: AbortSignal.timeout(15000), redirect: 'error',
     });
@@ -247,10 +276,11 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
       return;
     }
     await decisionRes.body?.cancel();
+    timing.decision = performance.now();
 
-    const active = { source: id, sessionId, token, plexUrl };
+    const active = { source: id, sessionId, token, plexUrl, kind };
     state.active = active;
-    const upstreamUrl = `${plexUrl}/video/:/transcode/universal/start.m3u8?${params}`;
+    const upstreamUrl = `${plexUrl}/${kind}/:/transcode/universal/start.m3u8?${params}`;
     const plexRes = await fetch(upstreamUrl, { headers: plexHeaders(token), signal: AbortSignal.timeout(15000), redirect: 'error' });
     if (!plexRes.ok) {
       await plexRes.body?.cancel();
@@ -262,6 +292,10 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
     state.active = active;
 
     const manifest = await plexRes.text();
+    timing.playlist = performance.now();
+    if (process.env.NODE_ENV !== 'production') {
+      console.info('[plex-start-timing]', JSON.stringify({ kind, detailsMs: Math.round(timing.details - timing.startedAt), decisionMs: Math.round(timing.decision - timing.details), playlistMs: Math.round(timing.playlist - timing.decision) }));
+    }
     res.set('Content-Type', 'application/vnd.apple.mpegurl');
     res.send(rewriteManifest(manifest, upstreamUrl, sessionId, req.query.direct === '1' ? directTokenForRequest(req) : ''));
   }
@@ -281,7 +315,11 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
       }
 
       const headers = plexHeaders(token);
+      const askedAt = performance.now();
       const result = await fetchPlexSegment(url, { headers, probe: sessionProbeFor(token, plexUrl), session: ownedSession });
+      // Outside production, say when Plex was slow to hand over a playlist or segment (a stream that is only starting).
+      const waitedMs = Math.round(performance.now() - askedAt);
+      if (process.env.NODE_ENV !== 'production' && waitedMs >= 1500) console.info('[plex-slow-segment]', JSON.stringify({ waitedMs, file: String(targetPath).split('/').pop().slice(0, 40) }));
       if (result.expired) {
         return res.status(410).json({ code: 'PLEX_SESSION_EXPIRED', error: 'Plex playback session expired' });
       }
@@ -403,6 +441,13 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
       const type = upstream.headers.get('content-type')?.split(';')[0];
       if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif'].includes(type)) { await upstream.body?.cancel(); return res.status(502).end(); }
       res.set('Content-Type', type);
+      // Every /api answer is "no-store" unless it says otherwise, which made the browser fetch each picture
+      // again every time it scrolled into view. A picture's address changes when its art does (it carries
+      // the art's version), so it can be kept; it is private to this viewer's browser.
+      if (upstream.ok) res.set('Cache-Control', 'private, max-age=86400');
+      // The address does not say whose picture it is, so the browser keeps one copy per session cookie: signing in as
+      // someone else in the same browser asks again instead of being handed the last person's.
+      res.vary('Cookie');
       if (upstream.body) pipeUpstream(upstream, res);
       else res.end();
     } catch {
@@ -442,7 +487,7 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
       }
       const resolved = await plexAuth.resolveServer(profileToken, chosen ? { serverId: chosen } : undefined);
       if (!resolved.ok) {
-        return res.json({ authenticated: false, pending: false, error: chosen && resolved.error ? resolved.error : 'This Plex account is not authorized for this server' });
+        return res.json({ authenticated: false, pending: false, error: resolved.error || 'This Plex account is not authorized for this server' });
       }
       // Use the per-server accessToken resolveServer found (see plex-auth.js), not the
       // profile's account token: PMS hub personalization needs the server-scoped token,
@@ -482,7 +527,7 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
           if (PLUGIN_CHOOSES_SERVER) {
             // Each viewer's server is chosen below; there is none to link.
           } else if (!owner.url) {
-            try { await ownerLink.connect(accountToken, { remember: true }); }
+            try { await ownerLink.connect(accountToken); }
             catch (err) {
               // Server log only; the viewer gets the generic message below.
               console.warn(`Could not link the Plex server after sign-in: ${err?.message ?? err}${err?.cause?.code ? ` (${err.cause.code})` : ''}`);
@@ -667,6 +712,13 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
         itemDetails: itemId => lib.itemDetails(itemId),
         subtitleTracks: itemId => lib.subtitleTracks(itemId),
         subtitleText: (itemId, trackId) => lib.subtitleText(itemId, trackId),
+        playlists: () => lib.playlists(),
+        playlistItems: playlistId => lib.playlistItems(playlistId),
+        similarArtists: artistId => lib.similarArtists(artistId),
+        popularTracks: artistId => lib.popularTracks(artistId),
+        similarTracks: trackId => lib.similarTracks(trackId),
+        lyricTracks: itemId => lib.lyricTracks(itemId),
+        lyricText: (itemId, trackId) => lib.lyricText(itemId, trackId),
         search: query => lib.search(query),
         continueWatching: () => continueWatching(req),
       };

@@ -64,10 +64,12 @@ globalThis.fetch = async (value, options = {}) => {
 const { app } = await import('../server.js');
 after(() => { globalThis.fetch = originalFetch; rmSync(temporary, { recursive: true, force: true }); });
 
-function request(url, { method = 'GET', body, cookie = '' } = {}) {
+function request(url, { method = 'GET', body, cookie = '', ip = null } = {}) {
   return new Promise((resolve, reject) => {
     const socket = new Socket();
     socket.encrypted = true;
+    // Another visitor, so the sign-in rate limit (10 a visitor) is counted apart.
+    if (ip) Object.defineProperty(socket, 'remoteAddress', { value: ip });
     const req = new IncomingMessage(socket);
     req.url = url; req.method = method;
     const payload = body === undefined ? null : JSON.stringify(body);
@@ -90,10 +92,10 @@ const cookieFrom = (response, name) => [response.headers['set-cookie'] || []].fl
 const reset = ({ servers = [one, two], users = [{ id: 10, title: 'Owner', admin: true }], listFails = false } = {}) => {
   Object.assign(globalThis, { __lists: [], __resolves: [], __servers: servers, __users: users, __listFails: listFails });
 };
-async function poll() {
-  const start = await request('/api/auth/plex/pin', { method: 'POST' });
+async function poll(ip = null) {
+  const start = await request('/api/auth/plex/pin', { method: 'POST', ip });
   const loginCookie = cookieFrom(start, 'freeStuffCrazyPlayerLogin');
-  const result = await request(`/api/auth/plex/poll?id=${start.json.id}`, { cookie: loginCookie });
+  const result = await request(`/api/auth/plex/poll?id=${start.json.id}`, { cookie: loginCookie, ip });
   return { pinId: String(start.json.id), result, loginCookie: cookieFrom(result, 'freeStuffCrazyPlayerLogin') || loginCookie };
 }
 const libraryTitle = async cookie => (await request('/api/library/libraries', { cookie })).json?.[0]?.title;
@@ -146,6 +148,13 @@ test('with only one server answering there is nothing to choose, and with none t
   const none = await poll();
   assert.equal(none.result.json.authenticated, false);
   assert.equal(none.result.json.error, 'None of your Plex servers are reachable right now');
+
+  // An account with no server at all, or whose single server is down, hears the real reason rather than
+  // a claim that it is "not authorized".
+  reset({ servers: [] });
+  const empty = await poll('203.0.113.9');
+  assert.equal(empty.result.json.authenticated, false);
+  assert.equal(empty.result.json.error, 'None of your Plex servers are reachable right now');
 });
 
 test('an account with one server, or a listing that fails, signs in as before', async () => {

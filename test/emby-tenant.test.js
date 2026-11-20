@@ -19,15 +19,23 @@ const pluginCalls = [];
 const coreCalls = [];
 
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
+// A response that never ends, counting what was read from it.
+const endless = { chunks: 0, cancelled: false };
+const endlessBody = () => new ReadableStream({
+  pull(controller) { endless.chunks++; controller.enqueue(new Uint8Array(16 * 1024).fill(32)); },
+  cancel() { endless.cancelled = true; },
+});
 async function tenantFetch(input, init = {}) {
   const url = new URL(String(input));
   pluginCalls.push({ host: url.host, path: url.pathname, params: url.searchParams, method: init.method || 'GET', headers: init.headers, body: init.body && JSON.parse(init.body) });
   if (url.host === 'down.example') throw Object.assign(new Error('connect failed'), { userMessage: 'That server’s certificate isn’t trusted (it may be self-signed).' });
+  if (url.host === 'huge.example') return new Response(endlessBody(), { headers: { 'Content-Type': 'application/json' } });
   if (url.pathname === '/System/Info/Public') return json({ Id: OTHER_ID, ServerName: 'Friend Emby' });
   if (url.pathname === '/Users/AuthenticateByName') return JSON.parse(init.body).Pw === 'right' ? json({ AccessToken: TOKEN, ServerId: OTHER_ID, User: { Id: USER_ID, Name: 'Pat' } }) : new Response('', { status: 401 });
   if (url.pathname === `/Users/${USER_ID}/Views`) return json({ Items: [{ Id: '3', Name: 'Movies', CollectionType: 'movies' }] });
   const playSession = url.host === 'twin.example' ? 'd'.repeat(32) : PLAY;
   if (url.pathname === '/Items/7/PlaybackInfo') return json({ PlaySessionId: playSession, MediaSources: [{ Id: 'mediasource_7', TranscodingUrl: `/videos/7/master.m3u8?PlaySessionId=${playSession}&api_key=K` }] });
+  if (url.host === 'bigplaylist.example' && url.pathname === '/videos/7/master.m3u8') return new Response(`#EXTM3U\n${'#EXT-X-X:0\n'.repeat(500_000)}`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
   if (url.pathname === '/videos/7/master.m3u8') return new Response(`#EXTM3U\nmain.m3u8?PlaySessionId=${playSession}\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
   return new Response(null, { status: 204 });
 }
@@ -168,6 +176,24 @@ test('progress stays with each viewer and server when IDs match', async () => {
   cookie = twinCookie;
   await send('/progress', { itemId: '7', timeMs: 1000, state: 'playing' });
   assert.equal(pluginCalls.findLast(call => call.path === '/Sessions/Playing/Progress').body.PlaySessionId, 'd'.repeat(32));
+});
+
+test('a typed server cannot make sign-in read an unbounded response', async () => {
+  const response = await send('/api/auth/emby/start', { server: 'https://huge.example' });
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).error, /Could not reach an Emby server/);
+  assert.ok(endless.cancelled, 'the body was dropped');
+  assert.ok(endless.chunks < 40, `read ${endless.chunks} chunks of an endless body`);
+});
+
+test('a playlist larger than the limit is refused', async () => {
+  let response = await send('/api/auth/emby/start', { server: 'https://bigplaylist.example' });
+  keepCookies(response);
+  response = await send('/api/auth/emby/password', { username: 'pat', password: 'right' });
+  keepCookies(response);
+  response = await send('/api/start?key=7');
+  assert.equal(response.status, 500);
+  assert.match((await response.json()).error, /too large/);
 });
 
 test('a session on a server whose plugin is gone stops working', async () => {

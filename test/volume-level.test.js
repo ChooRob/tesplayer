@@ -22,3 +22,14 @@ test('a saved volume is read back, and bad or missing storage gives the original
   assert.equal(readVolume(undefined), 1);
   assert.doesNotThrow(() => saveVolume({ setItem() { throw new Error('blocked'); } }, 1.2));
 });
+
+test('music keeps its own volume, apart from video', async () => {
+  const { MUSIC_VOLUME_KEY } = await import('../public/volume-level.js');
+  const store = new Map();
+  const storage = { getItem: key => (store.has(key) ? store.get(key) : null), setItem: (key, value) => store.set(key, value) };
+  saveVolume(storage, 4);
+  assert.equal(readVolume(storage, 4, MUSIC_VOLUME_KEY), 1, 'a film\'s boost does not reach music');
+  saveVolume(storage, 0.5, MUSIC_VOLUME_KEY);
+  assert.equal(readVolume(storage, 4), 4, 'and music does not change the film\'s');
+  assert.equal(readVolume(storage, 4, MUSIC_VOLUME_KEY), 0.5);
+});

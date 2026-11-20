@@ -6,6 +6,8 @@
 // race.
 
 const RETRY_DELAYS_MS = [0, 250, 500, 1000];
+// A missing session must stay missing this long before it counts as gone.
+const EXPIRED_CONFIRM_MS = 2500;
 const SEGMENT_BUDGET_MS = 8000; // stay under the browser's ~12s inactivity timeout
 const PROBE_TTL_MS = 250;
 
@@ -63,22 +65,31 @@ async function fetchWithTimeout(url, init, timeoutMs) {
   return fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
 }
 
-// Fetches a Plex HLS segment, retrying a 404 a few times (segment not encoded
-// yet) before asking the session-health probe whether the session itself is
-// gone. Returns { response, expired }.
-export async function fetchPlexSegment(url, { headers, probe, session } = {}) {
-  const deadline = Date.now() + SEGMENT_BUDGET_MS;
+// Fetches a Plex HLS segment, retrying a 404 (segment not encoded yet) until the budget runs out. The
+// session-health probe decides whether the session itself is gone, but only a session that stays gone is
+// believed: after a seek Plex restarts its transcoder, and for a moment the session is missing from its list
+// while it comes back. Returns { response, expired }.
+export async function fetchPlexSegment(url, { headers, probe, session, budgetMs = SEGMENT_BUDGET_MS, confirmExpiredMs = EXPIRED_CONFIRM_MS, retryDelaysMs = RETRY_DELAYS_MS } = {}) {
+  const deadline = Date.now() + budgetMs;
+  let expiredSince = null;
+  let response = null;
 
-  for (let attempt = 0; attempt < RETRY_DELAYS_MS.length; attempt += 1) {
-    if (RETRY_DELAYS_MS[attempt]) await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+  for (let attempt = 0; ; attempt += 1) {
+    const delay = retryDelaysMs[Math.min(attempt, retryDelaysMs.length - 1)];
+    if (attempt > 0 && delay) await new Promise((r) => setTimeout(r, delay));
 
     const remaining = Math.max(1000, deadline - Date.now());
-    const response = await fetchWithTimeout(url, { headers }, remaining);
+    response = await fetchWithTimeout(url, { headers }, remaining);
     if (response.status !== 404) return { response, expired: false };
 
     await response.body?.cancel().catch(() => {});
     const health = await probe(session);
-    if (health === 'expired') return { response: null, expired: true };
-    if (attempt === RETRY_DELAYS_MS.length - 1) return { response, expired: false };
+    if (health === 'expired') {
+      expiredSince ??= Date.now();
+      if (Date.now() - expiredSince >= confirmExpiredMs) return { response: null, expired: true };
+    } else {
+      expiredSince = null;
+    }
+    if (Date.now() + (retryDelaysMs[Math.min(attempt + 1, retryDelaysMs.length - 1)] || 0) >= deadline) return { response, expired: false };
   }
 }

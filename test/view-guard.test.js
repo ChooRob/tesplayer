@@ -45,9 +45,13 @@ test('every browse action that changes the grid starts a view', () => {
     assert.ok(start >= 0, `${name} exists`);
     return html.slice(start, html.indexOf('\n    }\n', start));
   };
-  for (const name of ['openLibrary', 'openShowSeasons', 'openSeason', 'openPluginTab', 'runSearch']) {
+  for (const name of ['openLibrary', 'openShowSeasons', 'openSeason', 'openPluginTab', 'showSearchResults']) {
     assert.match(body(name), /viewGuard\.begin\(\)/, `${name} must start a view`);
   }
+  // A search shows its results through showSearchResults, which starts the view; its lists are shared between
+  // searches, so a stale answer is dropped rather than cancelled.
+  assert.match(body('showSearchResults'), /isCurrent\(\)/, 'a search must drop a stale response');
+  assert.match(body('runSearch'), /await showSearchResults\(/, 'a search shows its results through it');
   for (const name of ['openLibrary', 'openShowSeasons', 'openSeason']) {
     const source = body(name);
     assert.match(source, /isCurrent\(\)/, `${name} must drop a stale response`);

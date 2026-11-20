@@ -26,6 +26,8 @@ const VIDEO_START_SECONDS = 0.15;
 const VIDEO_REBUFFER_SECONDS = 0.03;
 
 const ITERATOR_CLOSE_TIMEOUT_MS = 1500;
+// How long a finished track's audio waits for the next track to finish opening, before ending as usual.
+const PREPARE_WAIT_MS = 4000;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function clamp(value, min, max) {
@@ -45,7 +47,7 @@ async function closeIterator(iterator) {
 }
 
 export class Player {
-  constructor({ canvas, quality = 'high', onStateChange = () => {}, onStats = () => {} }) {
+  constructor({ canvas, quality = 'high', onStateChange = () => {}, onStats = () => {}, onTrackChange = () => {} }) {
     if (!globalThis.crossOriginIsolated || typeof SharedArrayBuffer !== 'function') {
       throw new Error('Player requires COOP/COEP (crossOriginIsolated) and SharedArrayBuffer');
     }
@@ -56,6 +58,11 @@ export class Player {
     this.context = canvas.getContext('2d', { alpha: false });
     this.onStateChange = onStateChange;
     this.onStats = onStats;
+    this.onTrackChange = onTrackChange;
+    // Gapless music: the next track, opened ahead (prepared), then with its audio queued behind this one's (chained).
+    this.prepared = null;
+    this.preparing = null;
+    this.chained = null;
 
     this.input = null;
     this.videoTrack = null;
@@ -115,6 +122,7 @@ export class Player {
     cancelAnimationFrame(this.animationFrame);
     this.liveAbort?.abort();
     this.clearVideoQueue();
+    this.discardNext();
     this.disposePreviousInputs();
     this.audioNode?.disconnect();
     await Promise.allSettled([closeIterator(this.videoIterator), closeIterator(this.audioIterator), this.audioContext?.close()]);
@@ -133,13 +141,17 @@ export class Player {
     this.audioInput = null;
   }
 
-  async load(url, { direct = false, readAheadSeconds = 0, startTime = 0 } = {}) {
+  async load(url, { direct = false, readAheadSeconds = 0, readAheadParallelism = 2, startTime = 0 } = {}) {
     this.setState('loading');
     ++this.generation;
+    // Loading over a track that is already playing (music moving on without a page reload): silence it first.
+    this.audioRing?.setRunning(false);
+    this.clock.stop();
+    this.discardNext();
     this.disposePreviousInputs();
     const sourceOptions = { maxCacheSize: this.quality === 'ultra' ? 24 * 1024 * 1024 : 8 * 1024 * 1024 };
     if (readAheadSeconds > 0 && !direct) {
-      this.prefetcher = new SegmentPrefetcher({ readAheadSeconds });
+      this.prefetcher = new SegmentPrefetcher({ readAheadSeconds, parallelism: readAheadParallelism });
       sourceOptions.fetchFn = this.prefetcher.fetch;
     }
     this.input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url, direct ? {
@@ -165,10 +177,19 @@ export class Player {
     }
 
     if (this.audioTrack) {
-      await this.initializeAudio({
-        sampleRate: await this.audioTrack.getSampleRate(),
-        channels: await this.audioTrack.getNumberOfChannels(),
-      });
+      const sampleRate = await this.audioTrack.getSampleRate();
+      const channels = await this.audioTrack.getNumberOfChannels();
+      // The same output carries on when the new track fits it; otherwise (or the first time) it is built.
+      const reusable = this.audioContext && this.audioContext.state !== 'closed' && this.audioRing
+        && this.audioContext.sampleRate === sampleRate && this.audioRing.channels === channels;
+      if (!reusable) {
+        this.audioNode?.disconnect();
+        this.audioNode = null;
+        const oldContext = this.audioContext;
+        this.audioContext = null;
+        await oldContext?.close().catch(() => {});
+        await this.initializeAudio({ sampleRate, channels });
+      }
       this.audioSink = new AudioSampleSink(this.audioTrack);
     }
 
@@ -241,8 +262,128 @@ export class Player {
     this.setState('paused');
   }
 
+  // Gapless music: open the next track while this one plays, so its first audio is ready when this one ends.
+  // Throws (and leaves nothing behind) if it cannot be played straight after this one, so the caller can
+  // simply load it when the time comes.
+  prepareNext(url, options) {
+    const opening = this.openNext(url, options);
+    const tracked = opening.then(() => {}, () => {});
+    this.preparing = tracked;
+    tracked.then(() => { if (this.preparing === tracked) this.preparing = null; });
+    return opening;
+  }
+
+  async openNext(url, { readAheadSeconds = 0, readAheadParallelism = 2 } = {}) {
+    if (this.isLive || !this.audioTrack || !this.audioRing || !this.audioContext || this.destroyed) throw new Error('Cannot prepare a next track');
+    this.discardNext();
+    const generation = this.generation;
+    const prepared = { input: null, prefetcher: null, track: null, sink: null, iterator: null, first: null, duration: 0 };
+    this.prepared = prepared;
+    const abandoned = () => this.prepared !== prepared || generation !== this.generation || this.destroyed;
+    try {
+      const sourceOptions = { maxCacheSize: this.quality === 'ultra' ? 24 * 1024 * 1024 : 8 * 1024 * 1024 };
+      if (readAheadSeconds > 0) {
+        prepared.prefetcher = new SegmentPrefetcher({ readAheadSeconds, parallelism: readAheadParallelism });
+        sourceOptions.fetchFn = prepared.prefetcher.fetch;
+      }
+      prepared.input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url, sourceOptions) });
+      prepared.track = await prepared.input.getPrimaryAudioTrack();
+      if (abandoned()) throw new Error('Next track no longer wanted');
+      if (!prepared.track) throw new Error('No audio in the next track');
+      // The output runs at one rate and channel count; a track that differs cannot follow on without a gap.
+      if (await prepared.track.getSampleRate() !== this.audioContext.sampleRate
+        || await prepared.track.getNumberOfChannels() !== this.audioRing.channels) throw new Error('Next track needs a different audio output');
+      prepared.duration = (await prepared.track.getDurationFromMetadata() ?? await prepared.track.computeDuration()) || 0;
+      if (abandoned()) throw new Error('Next track no longer wanted');
+      prepared.sink = new AudioSampleSink(prepared.track);
+      // Start reading it now: the first segments, and the read-ahead behind them, come while this track plays.
+      prepared.prefetcher?.activate();
+      prepared.iterator = prepared.sink.samples(0);
+      prepared.first = await prepared.iterator.next();
+      if (abandoned()) throw new Error('Next track no longer wanted');
+      return { duration: prepared.duration };
+    } catch (error) {
+      if (this.prepared === prepared) this.prepared = null;
+      this.disposeNextParts(prepared);
+      throw error;
+    }
+  }
+
+  disposeNextParts(next) {
+    if (!next) return;
+    const first = next.first?.value;
+    try { first?.close?.(); } catch { /* already closed */ }
+    void closeIterator(next.iterator);
+    next.prefetcher?.dispose();
+    next.input?.dispose?.();
+  }
+
+  // The next track is not wanted (the queue changed, a new track): let go of it, opened ahead or queued.
+  discardNext() {
+    const next = this.prepared;
+    this.prepared = null;
+    this.disposeNextParts(next);
+    this.discardChained();
+  }
+
+  discardChained() {
+    const chained = this.chained;
+    this.chained = null;
+    this.clock.clearChain();
+    this.disposeNextParts(chained);
+  }
+
+  // Playback has crossed from one track into the one queued behind it.
+  commitChained() {
+    const next = this.chained;
+    if (!next) return;
+    this.chained = null;
+    this.prefetcher?.dispose();
+    this.input?.dispose?.();
+    this.input = next.input;
+    this.prefetcher = next.prefetcher;
+    this.audioTrack = next.track;
+    this.audioSink = next.sink;
+    this.duration = next.duration;
+    this.onTrackChange({ duration: next.duration });
+  }
+
+  // Play the track opened ahead (prepareNext) right now, from its start, rather than waiting for this one to end:
+  // the skip button's version of the gapless handoff. Resolves false when there is nothing ready to play.
+  async adoptPrepared() {
+    const next = this.prepared;
+    if (!next || !next.iterator || this.chained || this.isLive || this.destroyed) return false;
+    this.prepared = null;
+    try { next.first?.value?.close?.(); } catch { /* already closed */ }
+    next.first = null;
+    void closeIterator(next.iterator);
+    const oldInput = this.input;
+    const oldPrefetcher = this.prefetcher;
+    this.input = next.input;
+    this.prefetcher = next.prefetcher;
+    this.audioTrack = next.track;
+    this.audioSink = next.sink;
+    this.duration = next.duration;
+    this.audioRing?.setRunning(false);
+    this.clock.stop();
+    this.seeking = true;
+    this.setState('buffering', { reason: 'seek' });
+    const restart = this.restartProducers(0);
+    const generation = this.generation;
+    await restart;
+    oldPrefetcher?.dispose();
+    oldInput?.dispose?.();
+    if (generation !== this.generation || this.destroyed) return true;
+    this.seeking = false;
+    if (this.wantsPlayback) this.updatePlaybackBarrier();
+    else this.setState('paused');
+    return true;
+  }
+
   async restartProducers(mediaTime) {
     const generation = ++this.generation;
+    // A seek or reload makes a track already queued behind this one stale; one only opened ahead is still good.
+    this.discardChained();
 
     const oldVideoIterator = this.videoIterator;
     const oldAudioIterator = this.audioIterator;
@@ -442,14 +583,36 @@ export class Player {
   async produceAudio(generation, mediaTime, iterator) {
     let nextFrame = 0;
     let decodedUntil = 0;
+    // Where the track being read starts: its time origin, and the output frame it begins at. A second track
+    // (gapless music) continues from the frame where the first ended.
+    let trackOrigin = mediaTime;
+    let frameBase = 0;
+    let pending = null;
     const shouldContinue = () => generation === this.generation && !this.destroyed;
     try {
       while (generation === this.generation && !this.destroyed) {
         const decodeStartedAt = performance.now();
-        const result = await iterator.next();
+        const result = pending ?? await iterator.next();
+        pending = null;
         this.audioDecodeWaitMs += performance.now() - decodeStartedAt;
         if (generation !== this.generation || this.destroyed) { result.value?.close(); return; }
         if (result.done) {
+          // Gapless: the next track, if one is ready (or about to be), carries straight on in the same output.
+          if (!this.prepared && this.preparing) await Promise.race([this.preparing, wait(PREPARE_WAIT_MS)]);
+          if (generation !== this.generation || this.destroyed) return;
+          const next = this.prepared;
+          if (next && !this.chained && !this.isLive) {
+            this.prepared = null;
+            this.chained = next;
+            iterator = next.iterator;
+            this.audioIterator = iterator;
+            pending = next.first;
+            next.first = null;
+            trackOrigin = 0;
+            frameBase = nextFrame;
+            this.clock.chainAt(nextFrame);
+            continue;
+          }
           this.audioEnded = true;
           this.audioRing.markEnded();
           return;
@@ -458,7 +621,7 @@ export class Player {
         this.audioPacketCount += 1;
         try {
           // Keep the ring on the media timeline across seeks and HLS segments.
-          const packetFrame = Math.round((sample.timestamp - mediaTime) * sample.sampleRate);
+          const packetFrame = frameBase + Math.round((sample.timestamp - trackOrigin) * sample.sampleRate);
           const endFrame = packetFrame + sample.numberOfFrames;
           if (endFrame <= nextFrame) continue;
           const writeStartedAt = performance.now();
@@ -524,6 +687,7 @@ export class Player {
     if (!this.seeking && this.audioEnded && this.audioRing?.availableFrames === 0) {
       this.clock.useWallClock();
     }
+    if (this.chained && this.clock.takeCrossing()) this.commitChained();
     const mediaTime = this.clock.currentTime;
     const videoPresentationTime = this.getVideoPresentationTime(mediaTime);
     this.renderVideo(videoPresentationTime);

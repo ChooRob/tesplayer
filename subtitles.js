@@ -68,7 +68,8 @@ export function orderTracks(tracks) {
     (Number(b.kind === 'text') - Number(a.kind === 'text')) || (Number(a.forced) - Number(b.forced)) || a.label.localeCompare(b.label));
 }
 
-const SRT_TIME = /(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})/;
+// SubRip always has hours; WebVTT may leave them out ("01:23.456").
+const SRT_TIME = /(?:(\d{1,2}):)?(\d{2}):(\d{2})[,.](\d{1,3})/;
 
 // SubRip or WebVTT text as WebVTT, which is what the page's parser reads. Cue
 // settings and style tags other than a few simple ones are dropped.
@@ -91,5 +92,5 @@ export function toWebVtt(text) {
 
 function stamp(value) {
   const [, h, m, s, ms] = SRT_TIME.exec(value);
-  return `${h.padStart(2, '0')}:${m}:${s}.${ms.padEnd(3, '0')}`;
+  return `${(h ?? '0').padStart(2, '0')}:${m}:${s}.${ms.padEnd(3, '0')}`;
 }

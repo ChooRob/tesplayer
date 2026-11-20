@@ -47,12 +47,17 @@ export function createMediaSession({
 
   let lastState = null;
   const silence = keepAlive && document ? createSilentAudio(document) : null;
+  // The car sends a Pause a moment after every Next or Previous press of the wheel (the logs show about
+  // 0.1 s). That Pause is part of the press, not a request to stop, so it is ignored.
+  const PAUSE_AFTER_TRACK_ACTION_MS = 1000;
+  let lastTrackActionAt = -Infinity;
   const handlers = {
     play: () => { onAction?.('play'); actions.play(); },
     // The car's browser keeps seeing the silent clip play, so it sends Pause for
     // every press of the wheel button. While we are paused, treat Pause as a toggle.
     pause: () => {
       onAction?.('pause');
+      if (now() - lastTrackActionAt < PAUSE_AFTER_TRACK_ACTION_MS) return;
       if (lastState === 'paused') actions.play(); else actions.pause();
     },
   };
@@ -61,8 +66,9 @@ export function createMediaSession({
     handlers.seekforward = (details) => actions.seekBy(details?.seekOffset || SKIP_SECONDS);
     // Some headsets and keyboards send Next and Previous instead. (The Tesla's
     // panel keeps its own Next and Previous greyed out for web pages either way.)
-    handlers.nexttrack = () => actions.seekBy(SKIP_SECONDS);
-    handlers.previoustrack = () => actions.seekBy(-SKIP_SECONDS);
+    // While music plays they move between tracks (nextTrack and previousTrack say whether they did).
+    handlers.nexttrack = () => { lastTrackActionAt = now(); if (!actions.nextTrack?.()) actions.seekBy(SKIP_SECONDS); };
+    handlers.previoustrack = () => { lastTrackActionAt = now(); if (!actions.previousTrack?.()) actions.seekBy(-SKIP_SECONDS); };
     handlers.seekto = (details) => { if (Number.isFinite(details?.seekTime)) actions.seekTo(details.seekTime); };
   }
   function registerHandlers() {

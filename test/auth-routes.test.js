@@ -136,6 +136,9 @@ test('actual login routes bind state, fail closed, ignore forged profile data an
   const me = await request('/api/auth/me', { cookie: sessionCookie });
   assert.equal(me.json.title, 'Child'); assert.equal(me.json.thumb, null);
   assert.equal('accountId' in me.json, false, 'with no limit plugin there is no account ID to show');
+  assert.match(me.json.stateScope, /^[0-9a-f]{32}$/, 'a one-way key for what the browser saves for this person');
+  // With no limit plugin accountKey is null, so the scope takes the account and server from the session itself.
+  assert.match(readFileSync(new URL('../server.js', import.meta.url), 'utf8'), /saved-state:\$\{source\.id\}:\$\{stateServer\}:\$\{stateAccount \|\| ''\}/);
   const beforeProbe = calls.length;
   const probe = await request('/api/playback-speed', { cookie: sessionCookie });
   assert.equal(probe.status, 200);

@@ -31,11 +31,21 @@
       padding: 10px 16px; font-size: 14px; cursor: pointer;
     }
     .libraries button.active { background: #0a84ff; border-color: #0a84ff; }
+    /* While searching, each tab shows how many results it has; the tab whose results are on screen is lit. */
+    .libraries button .searchCount { display: inline-block; margin-left: 8px; min-width: 22px; padding: 1px 7px; border-radius: 10px; background: #e5a00d; color: #111; font-size: 12px; font-weight: 700; text-align: center; }
+    .libraries button .searchCount.none { background: #444; color: #bbb; }
+    .libraries button.active .searchCount { background: #fff; color: #0a84ff; }
+    .libraries button.active .searchCount.none { background: rgba(255, 255, 255, .35); color: #fff; }
     #searchForm { display: flex; gap: 6px; margin-left: auto; }
     #searchInput {
       background: #1c1c1c; color: #eee; border: 1px solid #444; border-radius: 6px;
       padding: 9px 12px; font-size: 14px; width: 220px;
     }
+    #searchBox { position: relative; display: flex; flex: 1; min-width: 0; }
+    #searchBox #searchInput { padding-right: 34px; width: 220px; }
+    #searchInput::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; display: none; }
+    #searchForm #searchClear { position: absolute; right: 3px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: #444; color: #eee; font-size: 18px; line-height: 1; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+    #searchForm #searchClear[hidden] { display: none; }
     #searchForm button {
       background: #222; color: #eee; border: 1px solid #444; border-radius: 6px;
       padding: 9px 14px; font-size: 14px; cursor: pointer;
@@ -49,14 +59,18 @@
       .libraries button { min-height: 44px; white-space: nowrap; }
       #searchForm { margin-left: 0; width: 100%; }
       /* 16px stops iOS Safari zooming the page when the field is focused. */
-      #searchInput { flex: 1; min-width: 0; width: auto; font-size: 16px; min-height: 44px; }
+      #searchBox #searchInput { flex: 1; min-width: 0; width: auto; font-size: 16px; min-height: 44px; padding-right: 44px; }
+      #searchForm #searchClear { width: 34px; height: 34px; font-size: 22px; right: 5px; }
       #searchForm button { min-height: 44px; }
       .grid { grid-template-columns: repeat(auto-fill, minmax(105px, 1fr)); gap: 10px; }
       #fullscreenBtn { min-width: 44px; min-height: 44px; font-size: 18px; padding: 0 10px; }
       .shortLabel .label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
     }
+    /* The narrowest a column may be. The page reads it to count columns for the scroll length, so
+       a layout with wider columns (the track list) only has to say so here. */
     .grid {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      --col-min: 150px;
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--col-min), 1fr));
       gap: 14px;
     }
     /* The virtualizer resizes #gridTop/#gridBottom under the user's scroll
@@ -72,6 +86,83 @@
       width: 100%; aspect-ratio: 2/3; object-fit: cover; display: block;
     }
     .card.episode img { aspect-ratio: 16/9; }
+    /* Music artwork (artists, albums, tracks) is square. */
+    .card.square img { aspect-ratio: 1/1; }
+    /* Ways to list a library (artists, albums, tracks) and a live filter over what is on screen. */
+    /* A list of tracks is long, so each is a compact row: small art, then the title and artist. */
+    .grid.trackList { --col-min: 300px; gap: 6px 14px; }
+    .grid.trackList .card { display: grid; grid-template-columns: 56px 1fr; grid-template-areas: "art title" "art meta"; column-gap: 12px; align-items: center; padding: 4px; border-radius: 6px; }
+    .grid.trackList .card:hover { background: #1c1c1c; }
+    .grid.trackList .card .thumbWrap { grid-area: art; }
+    .grid.trackList .card img { width: 56px; height: 56px; aspect-ratio: 1/1; }
+    .grid.trackList .card .title { grid-area: title; margin: 0; align-self: end; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .grid.trackList .card .meta { grid-area: meta; align-self: start; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Artists like the one on screen, in rows under its albums. */
+    /* An artist's most played tracks, above its albums. */
+    #popularSection { margin-bottom: 22px; }
+    #popularSection[hidden] { display: none; }
+    #popularSection h2 { font-size: 15px; margin: 0 0 10px; color: #ccc; font-weight: 600; }
+    #popularMore { background: none; border: 0; color: #6db3ff; font-size: 13px; padding: 8px 0; min-height: 36px; cursor: pointer; }
+    #popularMore[hidden] { display: none; }
+    #similarSections { margin-top: 8px; }
+    .similarSection { margin-bottom: 28px; }
+    .similarSection h2 { font-size: 15px; margin: 0 0 10px; color: #ccc; font-weight: 600; }
+    /* The same carousel as Continue Watching and Recently Added (see setupCarousel). */
+    .carouselRow { display: flex; gap: 14px; overflow-x: auto; scrollbar-width: none; scroll-snap-type: x mandatory; }
+    .carouselRow::-webkit-scrollbar { display: none; }
+    .recentCard.artist { width: 150px; }
+    .recentCard.artist img { aspect-ratio: 1/1; }
+    /* The # A-Z bar at the right edge of a long list: tap a letter to go to that section. */
+    /* It runs the full height of the page (under the header), and each letter takes an equal share of it, so the
+       taller the screen the bigger the letters and the touch targets. */
+    #letterBar { position: fixed; right: 2px; top: 64px; bottom: 8px; z-index: 6; display: flex; flex-direction: column; align-items: stretch; padding: 4px 0; border-radius: 12px; background: rgba(20, 20, 20, .6); }
+    #letterBar[hidden] { display: none; }
+    #letterBar button { width: 34px; flex: 1 1 0; min-height: 0; padding: 0; border: 0; background: none; color: #c8c8c8; font: 600 clamp(10px, 2.3vh, 17px)/1 -apple-system, system-ui, sans-serif; cursor: pointer; border-radius: 6px; }
+    #letterBar { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+    #letterBar button:disabled { color: #555; cursor: default; }
+    #letterBar button.scrubbing { background: #e5a00d; color: #111; }
+    /* The letter the finger is on, just to its left, so you can tell when to let go. */
+    #letterBubble { position: fixed; z-index: 7; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; border-radius: 16px; background: #e5a00d; color: #111; font: 700 36px/1 -apple-system, system-ui, sans-serif; box-shadow: 0 4px 16px rgba(0, 0, 0, .5); pointer-events: none; }
+    #letterBubble[hidden] { display: none; }
+    #letterBar button:not(:disabled):active, #letterBar button.pending { background: #e5a00d; color: #111; }
+    body.hasLetterBar #grid { padding-right: 40px; }
+    /* A rule that sets display overrides the hidden attribute, so each of these says so: otherwise the
+       Artists/Albums/Tracks switch and the filter box stayed on screen on an artist's or album's page. */
+    /* Music that plays while you browse: the player (a page of its own) sits in a frame over everything when it
+       is open, and shrinks to a bar at the bottom of this page when it is not. The frame stays alive, a pixel
+       in the corner, so the music does not stop. */
+    #nowPlaying { position: fixed; inset: 0; z-index: 50; background: #111; }
+    #nowPlaying iframe { border: 0; width: 100%; height: 100%; display: block; }
+    #nowPlaying.minimized { inset: auto 0 0 auto; width: 2px; height: 2px; opacity: 0; pointer-events: none; z-index: -1; overflow: hidden; }
+    #playbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: flex; align-items: center; gap: 12px; height: 68px; padding: 0 14px 0 0; background: #1c1c1c; border-top: 1px solid #333; }
+    #playbar[hidden] { display: none !important; }
+    #playbarProgress { position: absolute; left: 0; right: 0; top: -1px; height: 3px; background: rgba(255, 255, 255, .12); }
+    #playbarFill { height: 100%; width: 0; background: #e5a00d; }
+    #playbarOpen { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; height: 100%; padding: 0 0 0 0; border: 0; background: none; color: #eee; text-align: left; cursor: pointer; }
+    #playbarArt { width: 68px; height: 68px; object-fit: cover; background: #222; flex: none; }
+    #playbarText { display: flex; flex-direction: column; min-width: 0; }
+    #playbarTitle { font: 600 15px -apple-system, system-ui, sans-serif; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #playbarArtist { font: 400 13px -apple-system, system-ui, sans-serif; color: #999; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #playbarTime { flex: none; margin-left: auto; padding: 0 6px; min-width: 13ch; box-sizing: content-box; text-align: right; color: #bbb; font: 500 13px -apple-system, system-ui, sans-serif; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    @media (max-width: 560px) { #playbarTime { display: none; } }
+    #playbarControls { display: flex; align-items: center; gap: 6px; flex: none; }
+    #playbarControls button { width: 44px; height: 44px; border: 0; border-radius: 50%; background: rgba(255, 255, 255, .1); color: #fff; font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+    #playbarControls #playbarExpand { width: auto; padding: 0 16px; gap: 8px; border-radius: 22px; background: #e5a00d; color: #111; font: 600 14px -apple-system, system-ui, sans-serif; }
+    @media (max-width: 560px) { #playbarExpandText { display: none; } #playbarControls #playbarExpand { width: 44px; padding: 0; } }
+    #playbarControls button:disabled { opacity: .4; cursor: default; }
+    /* Next and Previous turn to a spinner from the tap until the track has changed, so a slow moment is not tapped twice. */
+    #playbarControls button.skipping { position: relative; pointer-events: none; }
+    #playbarControls button.skipping > * { visibility: hidden; }
+    #playbarControls button.skipping::after { content: ''; position: absolute; left: calc(50% - 10px); top: calc(50% - 10px); width: 20px; height: 20px; box-sizing: border-box; border: 3px solid rgba(255, 255, 255, .3); border-top-color: #fff; border-radius: 50%; animation: loadingSpin .8s linear infinite; }
+    @media (prefers-reduced-motion: reduce) { #playbarControls button.skipping::after { animation-duration: 2s; } }
+    #playbarPlay { width: 50px; height: 50px; background: #e5a00d; color: #111; }
+    body.hasPlaybar { padding-bottom: 84px; }
+    body.hasPlaybar #letterBar { bottom: 76px; }
+    #gridControls[hidden], #viewSwitch[hidden], #detailActions[hidden], #popularSection[hidden], #letterBar[hidden] { display: none !important; }
+    #gridControls { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin: 0 0 14px; }
+    #viewSwitch { display: flex; gap: 6px; }
+    #viewSwitch button { background: #1c1c1c; color: #ccc; border: 1px solid #444; border-radius: 999px; padding: 7px 14px; font-size: 14px; cursor: pointer; min-height: 36px; }
+    #viewSwitch button[aria-selected="true"] { background: #e5a00d; border-color: #e5a00d; color: #111; font-weight: 700; }
     .progressBar {
       position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255,255,255,0.25);
     }
@@ -79,12 +170,11 @@
     .card .title { font-size: 13px; margin-top: 4px; line-height: 1.3; }
 .rating::before { content: ''; display: inline-block; width: 1em; height: 1em; margin-right: 3px; vertical-align: -0.12em; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23f5c518' d='M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z'/%3E%3C/svg%3E") center / contain no-repeat; }
     .card .meta { font-size: 11px; color: #888; }
-    #back {
-      display: none;
-      background: #222; color: #eee; border: 1px solid #444; border-radius: 6px;
-      padding: 10px 16px; font-size: 14px; cursor: pointer;
-    }
     #loading { color: #888; }
+    #loading.spinning { display: flex; justify-content: center; align-items: center; padding: 72px 0; }
+    #loading .spinner { width: 44px; height: 44px; border: 4px solid rgba(255, 255, 255, .15); border-top-color: #e5a00d; border-radius: 50%; animation: loadingSpin .9s linear infinite; }
+    @keyframes loadingSpin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { #loading .spinner { animation-duration: 2.4s; } }
 
     #continueSection { margin-bottom: 28px; }
     #continueSection h2 { font-size: 15px; margin: 0 0 10px; color: #ccc; font-weight: 600; }
@@ -125,10 +215,12 @@
     #recentRow::-webkit-scrollbar { display: none; }
 
     /* Show and season headers share the movie detail layout. */
-    #detailHeader { position: relative; margin-bottom: 24px; }
+    #detailHeader { position: relative; margin-bottom: 12px; }
     /* The fixed detail backdrop must stay behind the entire card, including
        its unpositioned season/episode labels, not just the thumbnail. */
-    #grid, #loading { position: relative; z-index: 1; }
+    /* Anything on a screen with a header must sit above the fixed backdrop and its fade, or it is
+       painted under them (the similar artists' names and the filter box were). */
+    #grid, #loading, #gridControls, #similarSections, #popularSection { position: relative; z-index: 1; }
     #detailBackdrop, #detailBackdropFade { pointer-events: none; }
     /* Cover the viewport without inheriting body padding. */
     #detailBackdrop {
@@ -146,8 +238,9 @@
       font-size: 14px; background: rgba(0,0,0,0.5); border: 1px solid #444;
       padding: 8px 14px; border-radius: 8px; cursor: pointer;
     }
-    #detailContent { position: relative; z-index: 1; display: flex; gap: 20px; padding: 16px 20px 20px; }
-    #detailPoster { width: 140px; flex-shrink: 0; border-radius: 8px; overflow: hidden; box-shadow: 0 6px 20px rgba(0,0,0,0.5); }
+    #detailContent { position: relative; z-index: 1; display: flex; gap: 20px; padding: 8px 20px 10px; }
+    /* align-self: the box is as tall as the picture, not as tall as the text beside it. */
+    #detailPoster { width: 140px; flex-shrink: 0; align-self: flex-start; border-radius: 8px; overflow: hidden; box-shadow: 0 6px 20px rgba(0,0,0,0.5); }
     #detailPoster img { width: 100%; display: block; }
     #detailInfo { flex: 1; min-width: 0; padding-top: 4px; }
     #detailTitle { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
@@ -156,7 +249,19 @@
     #detailMeta span { white-space: nowrap; }
     #detailMeta .badge { border: 1px solid #666; border-radius: 4px; padding: 2px 6px; font-size: 11px; }
     #detailGenres { margin-bottom: 10px; color: #999; font-size: 12px; }
-    #detailSummary { font-size: 13px; line-height: 1.5; color: #ddd; max-width: 700px; }
+    /* Play and Shuffle for an artist, album or playlist. */
+    #detailActions { display: flex; gap: 10px; margin: 6px 0 14px; flex-wrap: wrap; }
+    #detailActions[hidden] { display: none; }
+    #detailActions button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 20px; border: 0; border-radius: 8px; background: #2c2c2c; color: #eee; font-size: 15px; font-weight: 600; cursor: pointer; }
+    /* The rule above sets display on the buttons, which would otherwise win over the hidden attribute (Shuffle and Radio use it). */
+    #detailActions button[hidden] { display: none; }
+    #detailActions button.primary { background: #e5a00d; color: #111; }
+    #detailActions button:disabled { opacity: .5; cursor: default; }
+    /* A long biography takes three lines until the viewer asks for the rest, so the albums sit near the top. */
+    #detailSummary { font-size: 13px; line-height: 1.5; color: #ddd; max-width: 700px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    #detailSummary.expanded { display: block; overflow: visible; }
+    #detailSummaryToggle { display: block; background: none; border: 0; padding: 4px 0; min-height: 32px; color: #6db3ff; font-size: 13px; cursor: pointer; }
+    #detailSummaryToggle[hidden] { display: none; }
 
     .categories { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
     .categories button {
@@ -188,17 +293,19 @@
     Canvas playback is turned off, so videos use the standard player. In a Tesla, video only plays while parked.
   </div>
   <div class="toolbar">
-    <button id="back"><span data-icon="arrow-left"></span> back</button>
     <div class="libraries" id="libraries"></div>
     <form id="searchForm">
-      <input id="searchInput" type="search" placeholder="Search…" />
+      <span id="searchBox">
+        <input id="searchInput" type="search" placeholder="Search…" />
+        <button type="button" id="searchClear" aria-label="Clear search" title="Clear search" hidden>&times;</button>
+      </span>
       <button type="submit">Search</button>
     </form>
   </div>
   <script type="module">
     import { mountUserBadge } from '/user-badge.js';
     import { setupFullscreenButton } from '/fullscreen.js';
-    import { hydrateIcons } from '/icons.js';
+    import { hydrateIcons, iconEl } from '/icons.js';
     hydrateIcons();
     mountUserBadge(document.getElementById('userBadgeMount'), { prepend: false });
     setupFullscreenButton(document.getElementById('fullscreenBtn'));
@@ -244,15 +351,48 @@
         <div id="detailSubtitle"></div>
         <div id="detailMeta"></div>
         <div id="detailGenres"></div>
+        <div id="detailActions" hidden>
+          <button type="button" id="detailPlay" class="primary"><span data-icon="play"></span><span id="detailPlayLabel">Play</span></button>
+          <button type="button" id="detailShuffle"><span data-icon="shuffle"></span>Shuffle</button>
+          <button type="button" id="detailRadio" hidden><span data-icon="radio"></span>Radio</button>
+        </div>
         <div id="detailSummary"></div>
+        <button type="button" id="detailSummaryToggle" hidden aria-expanded="false" aria-controls="detailSummary">More</button>
       </div>
     </div>
   </div>
+  <div id="gridControls" hidden>
+    <div id="viewSwitch" role="tablist" aria-label="List by" hidden></div>
+  </div>
+  <!-- Under the Artists / Albums / Tracks switch, so it stays put while a list loads. -->
   <div id="loading"></div>
+  <div id="popularSection" hidden>
+    <h2>Popular Tracks</h2>
+    <div class="grid trackList" id="popularList"></div>
+    <button type="button" id="popularMore" hidden>Show More</button>
+  </div>
   <div id="grid">
     <div id="gridTop"></div>
     <div class="grid" id="gridItems"></div>
     <div id="gridBottom"></div>
+  </div>
+  <div id="similarSections"></div>
+  <nav id="letterBar" aria-label="Jump to a letter" hidden></nav>
+  <div id="nowPlaying" class="minimized" role="dialog" aria-label="Now playing"></div>
+  <div id="playbar" role="region" aria-label="Playing now" hidden>
+    <div id="playbarProgress"><div id="playbarFill"></div></div>
+    <button type="button" id="playbarOpen" aria-label="Open the player">
+      <img id="playbarArt" alt="">
+      <span id="playbarText"><span id="playbarTitle"></span><span id="playbarArtist"></span></span>
+      <span id="playbarTime"></span>
+    </button>
+    <div id="playbarControls">
+      <button type="button" id="playbarPrev" aria-label="Previous track"><span data-icon="skip-prev"></span></button>
+      <button type="button" id="playbarPlay" aria-label="Play or pause"><span data-icon="play"></span></button>
+      <button type="button" id="playbarNext" aria-label="Next track"><span data-icon="skip-next"></span></button>
+      <button type="button" id="playbarExpand" aria-label="Open the player" title="Open the player"><span data-icon="fullscreen"></span><span id="playbarExpandText">Now Playing</span></button>
+      <button type="button" id="playbarClose" aria-label="Stop the music"><span data-icon="close"></span></button>
+    </div>
   </div>
   <!-- Plugin-owned tab views mount here. -->
   <div id="pluginTabRoot"></div>
@@ -262,6 +402,14 @@
     import { getTabs, getTab } from "/tab-registry.js";
     import { createViewGuard, wasAborted } from "/view-guard.js";
     import { readBrowseView, writeBrowseView } from "/browse-location.js";
+    import { filterItems } from "/browse-filter.js";
+    import { clearSavedMusic, MUSIC_SESSION_KEY } from "/saved-music.js";
+    import { createQueue, saveQueue, readQueue, MAX_QUEUE } from "/music-queue.js";
+    import { gatherRadio } from "/music-radio.js";
+    import { LETTERS, letterIndex, targetIndex, LETTER_BAR_MIN_ITEMS } from "/letter-index.js";
+    import { MUSIC_MESSAGE, fromFrame, cleanState, keepsMusicPlaying, clock as clockOf } from "/music-host.js";
+    import { iconEl } from "/icons.js";
+    import { orderLibraries, readTabMemory, writeTabMemory, startingTab } from "/browse-memory.js";
     const pageHeaderEl = document.querySelector('.pageHeader');
     const toolbarEl = document.querySelector('.toolbar');
     const librariesEl = document.getElementById('libraries');
@@ -269,12 +417,51 @@
     const gridTopEl = document.getElementById('gridTop');
     const gridItemsEl = document.getElementById('gridItems');
     const gridBottomEl = document.getElementById('gridBottom');
-    const backEl = document.getElementById('back');
     const loadingEl = document.getElementById('loading');
+    // While something loads there is a spinner in the middle of the page, not words. Messages (an
+    // error, nothing found) are still words.
+    function showLoading() {
+      loadingEl.className = 'spinning';
+      loadingEl.setAttribute('role', 'status');
+      loadingEl.setAttribute('aria-label', 'Loading');
+      const spinner = document.createElement('span');
+      spinner.className = 'spinner';
+      loadingEl.replaceChildren(spinner);
+    }
+    function showMessage(text) {
+      loadingEl.className = '';
+      loadingEl.removeAttribute('role');
+      loadingEl.removeAttribute('aria-label');
+      loadingEl.textContent = text;
+    }
+    const clearLoading = () => showMessage('');
+    // The tab whose list is on screen, named with the way it is listed for music (artists, albums or tracks).
+    function searchScope() {
+      if (activePluginTab) return activePluginTab.label || null;
+      const lib = libraries.find((candidate) => candidate.id === currentLibraryId);
+      if (!lib) return null;
+      const view = (lib.views || []).find((candidate) => candidate.id === currentView);
+      return view ? `${lib.title} ${view.label.toLowerCase()}` : lib.title;
+    }
+    function updateSearchPlaceholder() {
+      // A plugin's tab (Live TV and the like) searches itself; everywhere else a search covers every library.
+      const own = activePluginTab?.onSearch ? activePluginTab.label : null;
+      searchInput.placeholder = own ? `Search ${own}…` : 'Search all libraries…';
+      searchInput.setAttribute('aria-label', own ? `Search ${own}` : 'Search all libraries');
+    }
     const searchForm = document.getElementById('searchForm');
     const searchInput = document.getElementById('searchInput');
+    const gridControlsEl = document.getElementById('gridControls');
+    const similarEl = document.getElementById('similarSections');
+    const popularEl = document.getElementById('popularSection');
+    const popularListEl = document.getElementById('popularList');
+    const popularMoreEl = document.getElementById('popularMore');
+    const letterBarEl = document.getElementById('letterBar');
+    const viewSwitchEl = document.getElementById('viewSwitch');
 
     let currentLibraryId = null;
+    let currentQueueLabel = ''; // what the tracks on screen belong to (an album or playlist), for the queue's heading
+    let currentView = null; // how the library is listed (one of its `views`, such as albums); null is its default
     let currentShowKey = null; // the show whose seasons or episodes are on screen, if any
     let currentSeasonKey = null; // the season whose episodes are on screen, if any
     // Continue Watching belongs to a library's own page; a late load or the periodic
@@ -289,11 +476,17 @@
     // Keep the screen (tab, show, season) in the address without adding a browser
     // history entry, so a reload comes back to the same place and the player's and
     // detail page's Back links can return to it (see browse-location.js).
+    // The tab (and a library's view) is also kept in the browser, so a visit with no tab in the
+    // address comes back to where the viewer was.
+    let tabStorage = null;
+    try { tabStorage = localStorage; } catch { /* nothing is remembered */ }
+
     function rememberView({ show = null, season = null } = {}) {
       currentShowKey = show;
       currentSeasonKey = show ? season : null;
+      if (tabStorage) writeTabMemory(tabStorage, { tab: currentLibraryId, view: currentView });
       const url = new URL(location.href);
-      writeBrowseView(url.searchParams, { tab: currentLibraryId, show: currentShowKey, season: currentSeasonKey });
+      writeBrowseView(url.searchParams, { tab: currentLibraryId, view: currentView, show: currentShowKey, season: currentSeasonKey });
       history.replaceState(null, '', url);
     }
 
@@ -343,7 +536,27 @@
     }
 
     // Render show metadata, optionally using the season’s poster.
-    function renderDetailHeader(item, { subtitle = '', poster, onBack } = {}) {
+    // What the Play and Shuffle buttons do on this screen; none when it has nothing to play.
+    function setDetailActions(actions) {
+      const box = document.getElementById('detailActions');
+      box.hidden = !actions;
+      if (!actions) return;
+      const play = document.getElementById('detailPlay');
+      const shuffle = document.getElementById('detailShuffle');
+      document.getElementById('detailPlayLabel').textContent = actions.playLabel || 'Play';
+      play.title = actions.playTitle || '';
+      play.onclick = actions.play;
+      shuffle.hidden = !actions.shuffle;
+      shuffle.onclick = actions.shuffle || null;
+      const radio = document.getElementById('detailRadio');
+      radio.hidden = !actions.radio;
+      radio.title = actions.radioTitle || '';
+      radio.onclick = actions.radio || null;
+      radio.disabled = false;
+    }
+
+    function renderDetailHeader(item, { subtitle = '', poster, onBack, actions = null } = {}) {
+      setDetailActions(actions);
       const backdropEl = document.getElementById('detailBackdrop');
       backdropEl.style.backgroundImage = item.backdrop ? `url(${item.backdrop})` : '';
       document.getElementById('detailPosterImg').src = poster || item.thumbnail || '';
@@ -353,7 +566,18 @@
       renderMetadata(document.getElementById('detailMeta'), item);
 
       document.getElementById('detailGenres').textContent = (item.genres || []).join(' · ');
-      document.getElementById('detailSummary').textContent = item.summary || '';
+      const summaryEl = document.getElementById('detailSummary');
+      const summaryToggle = document.getElementById('detailSummaryToggle');
+      summaryEl.textContent = item.summary || '';
+      summaryEl.classList.remove('expanded');
+      summaryToggle.hidden = true;
+      summaryToggle.setAttribute('aria-expanded', 'false');
+      summaryToggle.textContent = 'More';
+      summaryToggle.onclick = () => {
+        const open = summaryEl.classList.toggle('expanded');
+        summaryToggle.setAttribute('aria-expanded', String(open));
+        summaryToggle.textContent = open ? 'Less' : 'More';
+      };
 
       // Lives on the header itself rather than in the tab row -- this is a
       // "go up one level" control tied to this page, not another nav tab.
@@ -366,6 +590,8 @@
       pageHeaderEl.style.display = 'none';
       toolbarEl.style.display = 'none';
       detailHeaderEl.style.display = 'block';
+      // Only text that is cut off gets a More button; it can be measured once the header is on screen.
+      requestAnimationFrame(() => { summaryToggle.hidden = !(summaryEl.scrollHeight > summaryEl.clientHeight + 1); });
     }
 
     async function loadContinueWatching() {
@@ -459,7 +685,7 @@
     // A failure the viewer can act on: the server's own explanation, and the
     // next step (sign in again when the session ended, otherwise retry).
     function showLoadError(err) {
-      if (!err?.code) { loadingEl.textContent = `Error: ${err.message}`; return; }
+      if (!err?.code) { showMessage(`Error: ${err.message}`); return; }
       const message = document.createElement('p');
       message.textContent = err.message;
       const action = document.createElement('button');
@@ -472,6 +698,7 @@
         action.textContent = 'Try again';
         action.addEventListener('click', () => location.reload());
       }
+      showMessage(''); // not the spinner's layout
       loadingEl.replaceChildren(message, action);
     }
 
@@ -487,27 +714,264 @@
       }
       // Carries the active tab, show and season through so the player's back link
       // can return straight to this screen (see canvas2.html).
-      writeBrowseView(params, { tab: currentLibraryId, show: currentShowKey, season: currentSeasonKey });
+      writeBrowseView(params, { tab: currentLibraryId, view: currentView, show: currentShowKey, season: currentSeasonKey });
       window.location.href = `/canvas2?${params}`;
     }
 
+    // ---- Music that keeps playing while you browse ----
+    // The player is held in a frame (see music-host.js). Open, it is the whole screen; "Browse" in it only
+    // shrinks it to the bar at the bottom of this page, and the music goes on. Moving to movies, shows or a
+    // plugin's tab stops it. Where this page cannot hold the player (it is not isolated), a track still plays by
+    // going to the player's page, as before.
+    const musicHost = (() => {
+      const holder = document.getElementById('nowPlaying');
+      const bar = document.getElementById('playbar');
+      const els = {
+        art: document.getElementById('playbarArt'), title: document.getElementById('playbarTitle'), artist: document.getElementById('playbarArtist'),
+        fill: document.getElementById('playbarFill'), time: document.getElementById('playbarTime'), play: document.getElementById('playbarPlay'), prev: document.getElementById('playbarPrev'), next: document.getElementById('playbarNext'),
+      };
+      let frame = null;
+      let open = false;
+      let state = null;
+      const supported = () => window.crossOriginIsolated === true;
+      // What is playing, kept on this device so reopening the app (a new tab, after the browser was closed
+      // or the page was discarded) comes back to the player with the same list, not only a refresh.
+      // The queue itself lives in the tab's session storage, which does not outlast the tab, so a copy is kept too.
+      const SESSION_KEY = MUSIC_SESSION_KEY;
+      // Who is signed in, as the server names them (one-way, per install). What is kept is kept for them alone:
+      // with no answer it is neither saved nor restored.
+      const ownerPromise = fetch('/api/auth/me', { cache: 'no-store' })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((user) => (typeof user?.stateScope === 'string' && user.stateScope ? user.stateScope : null))
+        .catch(() => null);
+      let owner = null;
+      ownerPromise.then((value) => { owner = value; });
+      const RESTORE_WITHIN_MS = 24 * 60 * 60 * 1000;
+      let lastSaved = '';
+      let lastCopied = { id: null, at: 0 };
+      // The queue is known from the moment it starts, so a refresh straight after pressing Play is kept too.
+      let queueId = null;
+      function remember() {
+        try {
+          const queue = queueId || state?.queue;
+          if (!frame || !queue || !owner) return;
+          const value = JSON.stringify({ queue, open, position: Math.floor(state?.position || 0), playing: state?.playing === true });
+          if (value === lastSaved) return;
+          lastSaved = value;
+          localStorage.setItem(SESSION_KEY, JSON.stringify({ ...JSON.parse(value), owner, savedAt: Date.now() }));
+          // The queue changes only when the track does, so its copy is refreshed every few seconds, not every tick.
+          if (lastCopied.id !== queue || Date.now() - lastCopied.at > 5000) {
+            const current = readQueue(sessionStorage, queue);
+            if (current && saveQueue(localStorage, current)) lastCopied = { id: queue, at: Date.now() };
+          }
+        } catch { /* a refresh then starts without it */ }
+      }
+      function forget() {
+        lastSaved = ''; lastCopied = { id: null, at: 0 };
+        try { localStorage.removeItem(SESSION_KEY); } catch { /* nothing kept */ }
+      }
+      const command = (name, extra = {}) => frame?.contentWindow?.postMessage({ type: MUSIC_MESSAGE, event: 'command', name, ...extra }, location.origin);
+
+      function render() {
+        const showBar = !!frame && !open && !!state;
+        bar.hidden = !showBar;
+        document.body.classList.toggle('hasPlaybar', showBar);
+        if (!showBar) return;
+        els.title.textContent = state.title || 'Playing';
+        els.artist.textContent = [state.artist, state.album].filter(Boolean).join(' — ');
+        if (state.thumbnail) els.art.src = state.thumbnail;
+        els.fill.style.width = state.duration ? `${Math.min(100, (state.position / state.duration) * 100)}%` : '0%';
+        els.time.textContent = state.duration ? `${clockOf(state.position)} / ${clockOf(state.duration)}` : '';
+        // What the player means to be doing, so a moment of buffering still shows Pause.
+        const playing = state.playing;
+        els.play.replaceChildren(iconEl(playing ? 'pause' : 'play'));
+        els.play.setAttribute('aria-busy', state.state === 'loading' || state.state === 'buffering' ? 'true' : 'false');
+        els.play.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+        els.prev.disabled = !state.hasPrevious;
+        els.next.disabled = !state.hasNext;
+      }
+      function setOpen(value) {
+        open = value;
+        holder.classList.toggle('minimized', !value);
+        if (value) frame?.focus();
+        render();
+        remember();
+      }
+      function stop() {
+        if (!frame) return;
+        command('stop');
+        frame.remove();
+        frame = null;
+        state = null;
+        queueId = null;
+        forget();
+        setOpen(false);
+      }
+      // Play this queue's track in the player, opening it full screen.
+      function start(params) {
+        params.set('embedded', '1');
+        if (!frame) {
+          frame = document.createElement('iframe');
+          frame.title = 'Now playing';
+          // The player may start sound by itself once a tap here has asked for it, and needs isolation like this page.
+          frame.setAttribute('allow', 'autoplay; cross-origin-isolated');
+          holder.append(frame);
+        }
+        state = null;
+        queueId = params.get('queue');
+        frame.src = `/canvas2?${params}`;
+        setOpen(true);
+      }
+      window.addEventListener('message', (event) => {
+        if (!fromFrame(event, frame?.contentWindow, location.origin)) return;
+        if (event.data?.type === MUSIC_MESSAGE && event.data.event === 'minimize') { setOpen(false); return; }
+        // An artist or album link in the player: shrink it and go there in this page, so the music goes on.
+        if (event.data?.type === MUSIC_MESSAGE && event.data.event === 'navigate') {
+          try {
+            const target = new URL(String(event.data.url), location.origin);
+            if (target.origin !== location.origin || target.pathname !== '/browse') return;
+            const { tab, view, show, season } = readBrowseView(target.search);
+            const lib = libraries.find((l) => l.id === tab);
+            setOpen(false);
+            if (lib && show) restoreShowView(lib, show, season, view);
+            else if (lib) openLibrary(lib, view);
+          } catch { /* not a link we follow */ }
+          return;
+        }
+        const next = cleanState(event.data);
+        if (next) {
+          if (skipFrom && next.key !== skipFrom.key) skipping(null);
+          state = next;
+          if (next.skipping && !skipFrom) skipping(next.skipping === 'next' ? els.next : els.prev);
+          render(); remember();
+        }
+      });
+      document.getElementById('playbarOpen').addEventListener('click', () => setOpen(true));
+      document.getElementById('playbarExpand').addEventListener('click', () => setOpen(true));
+      els.play.addEventListener('click', () => command('toggle'));
+      // From the tap until the player reports another track (or a few seconds, if nothing came of it).
+      let skipFrom = null;
+      let skipTimer = null;
+      function skipping(button) {
+        skipFrom = button ? { key: state?.key ?? null } : null;
+        for (const other of [els.prev, els.next]) other.classList.toggle('skipping', other === button);
+        clearTimeout(skipTimer);
+        if (button) skipTimer = setTimeout(() => skipping(null), 10000);
+      }
+      els.prev.addEventListener('click', () => { if (skipFrom) return; skipping(els.prev); command('previous'); });
+      els.next.addEventListener('click', () => { if (skipFrom) return; skipping(els.next); command('next'); });
+      document.getElementById('playbarClose').addEventListener('click', stop);
+      // After a refresh or reopening the app: the player comes back where it was, on the same list and on the same screen
+      // (full or the bar), playing again if it was, paused if it was paused.
+      async function restore() {
+        if (frame || !supported()) return;
+        try {
+          const saved = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+          if (!saved) return;
+          const who = await ownerPromise;
+          if (frame) return; // something else started music while the answer was awaited
+          // Kept by someone else (another account or profile on this browser): not theirs to see or play, and gone now.
+          if (!who || saved.owner !== who) { if (who) clearSavedMusic(); return; }
+          if (saved && !(Date.now() - saved.savedAt < RESTORE_WITHIN_MS)) { forget(); return; }
+          const id = saved && typeof saved.queue === 'string' ? saved.queue : null;
+          // This tab's own copy first (a refresh); otherwise the copy kept on the device (the app was reopened).
+          let queue = id ? readQueue(sessionStorage, id) : null;
+          if (id && !queue) {
+            queue = readQueue(localStorage, id);
+            if (queue) saveQueue(sessionStorage, queue);
+          }
+          const track = queue?.items[queue.index];
+          if (!track) { forget(); return; }
+          const params = new URLSearchParams({ key: track.ratingKey, queue: queue.id });
+          // Music that was playing carries on; if the browser will not start sound by itself, the player offers a tap to unlock it.
+          if (saved.playing !== true) params.set('paused', '1');
+          if (Number.isFinite(saved.position) && saved.position > 0) params.set('resume', String(saved.position));
+          start(params);
+          setOpen(saved.open !== false);
+        } catch { forget(); }
+      }
+      return { start, stop, restore, supported, get active() { return !!frame; } };
+    })();
+
+    // Press Play: a queue of tracks is made (and kept for the player, a page per track) and the
+    // first is played. An artist plays every track shuffled; an album or playlist plays in order,
+    // or shuffled; a track plays its album, or whatever list it was in, from that track on.
+    function playQueue({ label = '', items, start = 0, shuffle = false, radio = null }) {
+      // A very long list is cut around the track chosen rather than from its beginning.
+      let list = items;
+      let at = start;
+      if (!shuffle && list.length > MAX_QUEUE) {
+        const from = Math.max(0, start - 50);
+        list = list.slice(from, from + MAX_QUEUE);
+        at = start - from;
+      }
+      // Repeat is a setting of the player that outlasts a queue.
+      let repeat = 'off';
+      try { repeat = localStorage.getItem('freeStuffCrazyPlayer.repeat') || 'off'; } catch { /* off */ }
+      const queue = createQueue({ label, items: list, start: at, shuffle, repeat, radio });
+      if (!queue.items.length) return;
+      let saved = false;
+      try { saved = saveQueue(sessionStorage, queue); } catch { /* the player then plays this track alone */ }
+      const params = new URLSearchParams({ key: queue.items[queue.index].ratingKey });
+      if (saved) params.set('queue', queue.id);
+      writeBrowseView(params, { tab: currentLibraryId, view: currentView, show: currentShowKey, season: currentSeasonKey });
+      // Held in a frame, the music carries on while you browse; if this page cannot hold it, go to the player.
+      if (saved && musicHost.supported()) { musicHost.start(params); return; }
+      window.location.href = `/canvas2?${params}`;
+    }
+
+    // The list a track was clicked in, as a queue starting at it.
+    // Clicking a track plays it and then tracks that sound like it, as Plex's sonic similarity finds them,
+    // added to the list after it. A source (or a library) with none to offer, or one that is slow to say,
+    // plays the track's own list from it, as before.
+    const SIMILAR_WAIT_MS = 2500;
+    async function playTrackWithSimilar(track) {
+      let similar = [];
+      try {
+        similar = await Promise.race([
+          fetchJson(`/api/library/similar-tracks/${track.ratingKey}`),
+          new Promise((resolve) => setTimeout(() => resolve([]), SIMILAR_WAIT_MS)),
+        ]);
+      } catch { /* the track's own list */ }
+      const more = (Array.isArray(similar) ? similar : []).filter((item) => item.type === 'track' && item.ratingKey !== track.ratingKey);
+      if (!more.length) { playTrackFromList(track); return; }
+      playQueue({ label: `Similar to ${track.title}`, items: [track, ...more], start: 0 });
+    }
+
+    function playTrackFromList(track) {
+      const tracks = gridState.items.filter((item) => item.type === 'track'); // what is shown, as filtered
+      const at = tracks.findIndex((item) => item.ratingKey === track.ratingKey);
+      const label = currentQueueLabel || (currentView === 'tracks' ? 'Tracks' : '');
+      playQueue({ label, items: at >= 0 ? tracks : [track], start: Math.max(0, at) });
+    }
+
     function openItem(item) {
+      if (item.type === 'track') { playTrackWithSimilar(item); return; }
       // Details screen is movies-only. Episodes always play directly (as before),
       // and an in-progress movie skips straight back into resume playback.
       if (item.type !== 'movie' || isResumable(item)) {
         playItem(item);
       } else {
         const params = new URLSearchParams({ key: item.ratingKey });
-        writeBrowseView(params, { tab: currentLibraryId, show: currentShowKey, season: currentSeasonKey });
+        writeBrowseView(params, { tab: currentLibraryId, view: currentView, show: currentShowKey, season: currentSeasonKey });
         window.location.href = `/detail?${params}`;
       }
     }
 
     // Dispatch cards by type; Recently Added may contain both seasons and episodes.
+    // An artist holds albums the way a show holds seasons, and an album holds tracks the way a
+    // season holds episodes, so music reuses those screens (see sources.js).
+    const OPENS_CHILDREN = new Set(['show', 'artist']);
+    const OPENS_GROUP = new Set(['season', 'album']);
+    const SQUARE_ART = new Set(['artist', 'album', 'track', 'playlist']);
     function handleItemClick(item, { skippedSeasons = false } = {}) {
-      if (item.type === 'show') {
+      if (item.type === 'playlist') {
+        openPlaylist(item);
+      } else if (OPENS_CHILDREN.has(item.type)) {
         openShowSeasons(item.ratingKey, item.title);
-      } else if (item.type === 'season') {
+      } else if (OPENS_GROUP.has(item.type)) {
+        // An album picked from a list of every album has no artist screen behind it: Back is the list.
+        if (item.type === 'album' && onLibraryPage) skippedSeasons = true;
         // Skip the season-list back target when navigation bypassed that list.
         openSeason(item, { skippedSeasons });
       } else {
@@ -567,12 +1031,14 @@
     // Render only rows near the viewport; spacers preserve scroll position.
     const GRID_MIN_COL_WIDTH = 150; // keep in sync with .grid's CSS minmax()
     const GRID_ROW_BUFFER = 2; // extra rows rendered above/below the viewport
-    const gridState = { items: [], episode: false, columns: 0, rowHeight: 0, renderedRange: null };
+    const gridState = { all: [], items: [], episode: false, columns: 0, rowHeight: 0, renderedRange: null };
 
+    const clock = ms => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
     function buildCard(item, episode) {
-      const isSeason = item.type === 'season';
+      const isSeason = OPENS_GROUP.has(item.type);
+      const isTrack = item.type === 'track';
       const card = document.createElement('div');
-      card.className = 'card' + (episode ? ' episode' : '');
+      card.className = 'card' + (episode ? ' episode' : '') + (SQUARE_ART.has(item.type) ? ' square' : '');
 
       const thumbWrap = document.createElement('div');
       thumbWrap.className = 'thumbWrap';
@@ -596,17 +1062,27 @@
 
       const title = document.createElement('div');
       title.className = 'title';
-      title.textContent = episode
-        ? `${item.season != null ? 'S' + item.season : ''}${item.episode != null ? 'E' + item.episode : ''} ${item.title}`.trim()
-        : item.title;
+      title.textContent = isTrack
+        ? `${item.episode != null ? item.episode + '. ' : ''}${item.title}`
+        : episode
+          ? `${item.season != null ? 'S' + item.season : ''}${item.episode != null ? 'E' + item.episode : ''} ${item.title}`.trim()
+          : item.title;
       card.appendChild(title);
 
       const meta = document.createElement('div');
       meta.className = 'meta';
-      if (isSeason) {
-        meta.textContent = item.leafCount
-          ? `${item.viewedLeafCount || 0}/${item.leafCount} episodes`
-          : '';
+      if (isTrack) {
+        meta.textContent = [item.artist, item.durationMs ? clock(item.durationMs) : null].filter(Boolean).join(' · ');
+      } else if (isSeason) {
+        meta.textContent = item.type === 'album'
+          ? [item.year, item.leafCount ? `${item.leafCount} tracks` : null].filter(Boolean).join(' · ')
+          : item.leafCount
+            ? `${item.viewedLeafCount || 0}/${item.leafCount} episodes`
+            : '';
+      } else if (item.type === 'artist') {
+        meta.textContent = item.leafCount ? `${item.leafCount} tracks` : '';
+      } else if (item.type === 'playlist') {
+        meta.textContent = [item.leafCount ? `${item.leafCount} tracks` : null, item.duration ? `${item.duration}m` : null].filter(Boolean).join(' · ');
       } else if (episode) {
         meta.textContent = item.duration ? `${item.duration}m` : '';
       } else {
@@ -614,14 +1090,17 @@
       }
       card.appendChild(meta);
 
-      card.addEventListener('click', () => handleItemClick(item));
+      card.addEventListener('click', () => (typeof item.onPlay === 'function' ? item.onPlay() : handleItemClick(item)));
       return card;
     }
 
     function measureColumns() {
       const style = getComputedStyle(gridItemsEl);
       const gap = parseFloat(style.columnGap) || 14;
-      return Math.max(1, Math.floor((gridItemsEl.clientWidth + gap) / (GRID_MIN_COL_WIDTH + gap)));
+      // The column width the CSS asks for, so the count matches what is drawn. (Counting 150px columns
+      // for a list of 300px ones made the list look shorter than it is, and its end could not be reached.)
+      const min = parseFloat(style.getPropertyValue('--col-min')) || GRID_MIN_COL_WIDTH;
+      return Math.max(1, Math.floor((gridItemsEl.clientWidth + gap) / (min + gap)));
     }
 
     // Measure a rendered card so virtualized spacers match the current CSS.
@@ -644,7 +1123,17 @@
     }
 
     function clearGrid() {
+      currentQueueLabel = '';
+      similarEl.replaceChildren();
+      letterBarEl.hidden = true;
+      document.body.classList.remove('hasLetterBar');
+      pendingLetter = null;
+      popularEl.hidden = true;
+      popularListEl.replaceChildren();
+      gridState.all = [];
       gridState.items = [];
+      gridControlsEl.hidden = true;
+      viewSwitchEl.hidden = true;
       gridState.columns = 0;
       gridState.rowHeight = 0;
       gridState.renderedRange = null;
@@ -653,13 +1142,132 @@
       gridBottomEl.style.height = '0px';
     }
 
-    function renderGrid(items, { episode = false } = {}) {
-      gridState.items = items;
+    // `items` is everything on this screen; what the filter box holds decides which are shown.
+    function renderGrid(items, { episode = false, total = items.length } = {}) {
+      gridState.all = items;
       gridState.episode = episode;
+      gridState.total = total;
+      gridItemsEl.classList.toggle('trackList', items.length > 0 && items.every((item) => item.type === 'track'));
+      showGridItems();
+    }
+
+    function showGridItems() {
+      gridState.items = gridState.all;
       gridState.columns = 0;
       gridState.rowHeight = 0;
       gridState.renderedRange = null;
+      updateLetterBar();
+      gridControlsEl.hidden = viewSwitchEl.hidden;
       renderVirtualGridWindow();
+      runPendingLetter();
+    }
+
+    // ---- The # A-Z bar ----
+    const letterButtons = new Map();
+    let letterPositions = new Map();
+    let pendingLetter = null; // a letter tapped before its section had loaded
+    for (const letter of LETTERS) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = letter;
+      button.setAttribute('aria-label', letter === '#' ? 'Jump to numbers and symbols' : `Jump to ${letter}`);
+      // Touch, pen and mouse go through the bar's pointer handlers below; a click with no pointer is the keyboard.
+      button.addEventListener('click', (event) => { if (event.detail === 0) tapLetter(letter); });
+      letterButtons.set(letter, button);
+      letterBarEl.append(button);
+    }
+    const listIsComplete = () => !(gridState.total > gridState.all.length);
+
+    // Slide a finger down the bar and the list follows it; the letter is shown just left of the finger.
+    const letterBubble = document.createElement('div');
+    letterBubble.id = 'letterBubble';
+    letterBubble.hidden = true;
+    letterBubble.setAttribute('aria-hidden', 'true');
+    document.body.append(letterBubble);
+    let scrubbing = null; // { pointerId, letter }
+    function letterAt(event) {
+      const rect = letterBarEl.getBoundingClientRect();
+      // However far left the finger has strayed, it is the height that says which letter.
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, Math.min(Math.max(event.clientY, rect.top + 2), rect.bottom - 2));
+      const button = hit?.closest?.('#letterBar button');
+      return button ? button.textContent : null;
+    }
+    function scrubTo(event) {
+      const letter = letterAt(event);
+      if (!letter) return;
+      const rect = letterBarEl.getBoundingClientRect();
+      // Left of the finger, and kept on screen.
+      const size = 64;
+      const left = Math.max(8, Math.min(event.clientX - size - 28, rect.left - size - 8));
+      const top = Math.max(8, Math.min(event.clientY - size / 2, window.innerHeight - size - 8));
+      letterBubble.style.left = `${left}px`;
+      letterBubble.style.top = `${top}px`;
+      if (letter === scrubbing.letter) return;
+      scrubbing.letter = letter;
+      letterBubble.textContent = letter;
+      for (const [other, button] of letterButtons) button.classList.toggle('scrubbing', other === letter);
+      tapLetter(letter);
+    }
+    function endScrub(event) {
+      if (!scrubbing || (event && event.pointerId !== scrubbing.pointerId)) return;
+      scrubbing = null;
+      letterBubble.hidden = true;
+      for (const button of letterButtons.values()) button.classList.remove('scrubbing');
+    }
+    letterBarEl.addEventListener('pointerdown', (event) => {
+      if (event.button > 0 || scrubbing) return;
+      scrubbing = { pointerId: event.pointerId, letter: null };
+      try { letterBarEl.setPointerCapture(event.pointerId); } catch { /* the bar still gets the moves it is over */ }
+      letterBubble.hidden = false;
+      event.preventDefault();
+      scrubTo(event);
+    });
+    letterBarEl.addEventListener('pointermove', (event) => { if (scrubbing && event.pointerId === scrubbing.pointerId) scrubTo(event); });
+    letterBarEl.addEventListener('pointerup', endScrub);
+    letterBarEl.addEventListener('pointercancel', endScrub);
+    letterBarEl.addEventListener('lostpointercapture', endScrub);
+
+    // Shown on a long library list; which letters have a section, and where each begins.
+    function updateLetterBar() {
+      const lib = libraries.find((l) => l.id === currentLibraryId);
+      const show = onLibraryPage && !activePluginTab && lib?.type !== 'playlists' && gridState.items.length >= LETTER_BAR_MIN_ITEMS;
+      letterBarEl.hidden = !show;
+      document.body.classList.toggle('hasLetterBar', show);
+      if (!show) return;
+      letterPositions = letterIndex(gridState.items, currentView);
+      // While the rest of a long list is still arriving, every letter can be tapped.
+      for (const [letter, button] of letterButtons) button.disabled = listIsComplete() && !letterPositions.has(letter);
+    }
+
+    function scrollToItem(index) {
+      const columns = gridState.columns || measureColumns();
+      const row = Math.floor(index / columns);
+      const top = gridEl.getBoundingClientRect().top + window.scrollY + row * gridState.rowHeight - 8;
+      window.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
+      scheduleRenderVirtualGridWindow();
+    }
+
+    function tapLetter(letter) {
+      if (!listIsComplete() && !letterPositions.has(letter)) {
+        // Its section has not come in yet: go on as far as there is, and on to it when it arrives.
+        pendingLetter = letter;
+        letterButtons.get(letter)?.classList.add('pending');
+        scrollToItem(Math.max(0, gridState.items.length - 1));
+        return;
+      }
+      const at = targetIndex(letterPositions, letter);
+      if (at !== null) scrollToItem(at);
+    }
+
+    function runPendingLetter() {
+      if (!pendingLetter || (!letterPositions.has(pendingLetter) && !listIsComplete())) {
+        if (pendingLetter) scrollToItem(Math.max(0, gridState.items.length - 1)); // keep up with the loading
+        return;
+      }
+      const letter = pendingLetter;
+      pendingLetter = null;
+      letterButtons.get(letter)?.classList.remove('pending');
+      tapLetter(letter);
     }
 
     function renderVirtualGridWindow() {
@@ -696,11 +1304,25 @@
       gridTopEl.style.height = `${firstRow * rowHeight}px`;
       gridBottomEl.style.height = `${Math.max(0, (totalRows - 1 - lastRow) * rowHeight)}px`;
 
-      gridItemsEl.innerHTML = '';
+      // A card that is still wanted stays in the page as it is. Rebuilding every card on each scroll step made
+      // iOS Safari redraw every poster from empty (a blink of grey tiles); now only the rows that come into
+      // view are built and only the ones that leave are removed.
+      if (gridState.cardCache?.episode !== episode) gridState.cardCache = { episode, cards: new WeakMap() };
+      const { cards } = gridState.cardCache;
       const startIdx = firstRow * columns;
       const endIdx = Math.min(items.length, (lastRow + 1) * columns);
+      const wanted = [];
       for (let i = startIdx; i < endIdx; i++) {
-        gridItemsEl.appendChild(buildCard(items[i], episode));
+        let card = cards.get(items[i]);
+        if (!card) { card = buildCard(items[i], episode); cards.set(items[i], card); }
+        wanted.push(card);
+      }
+      const keep = new Set(wanted);
+      for (const child of [...gridItemsEl.children]) if (!keep.has(child)) child.remove();
+      let cursor = gridItemsEl.firstElementChild;
+      for (const card of wanted) {
+        if (card === cursor) cursor = cursor.nextElementSibling;
+        else gridItemsEl.insertBefore(card, cursor);
       }
     }
 
@@ -716,11 +1338,6 @@
     window.addEventListener('scroll', scheduleRenderVirtualGridWindow, { passive: true });
     window.addEventListener('resize', scheduleRenderVirtualGridWindow);
 
-    function showBack(onClick) {
-      backEl.style.display = 'inline-block';
-      backEl.onclick = onClick;
-    }
-
     // Close the active plugin view before showing library or search results.
     function closeActiveTab() {
       if (activePluginTab) { activePluginTab.onClose?.(); activePluginTab = null; }
@@ -728,62 +1345,132 @@
 
     // Update shared navigation; each plugin renders its own tab content.
     async function openPluginTab(tab) {
+      musicHost.stop(); // a plugin's tab (Live TV and the like) is not music
+      endSearch();
       viewGuard.begin(); // a library still loading must not draw behind this tab
       onLibraryPage = false;
       currentLibraryId = tab.id;
       rememberView();
-      backEl.style.display = 'none';
       showContinueSection(false);
       showRecentSection(false);
       hideDetailHeader();
       [...librariesEl.children].forEach((btn) => btn.classList.toggle('active', btn.dataset.id === tab.id));
       gridEl.style.display = 'none';
       activePluginTab = tab;
+      updateSearchPlaceholder();
       await tab.onOpen();
     }
 
-    async function openLibrary(lib) {
+    // One way a library can be listed: the library's own list of `views` says which, the
+    // first being the default. Coming back to the library keeps the view it was left on.
+    function chooseView(lib, wanted) {
+      const views = lib.views || [];
+      return views.find((candidate) => candidate.id === wanted)?.id ?? views[0]?.id ?? null;
+    }
+
+    function renderViewSwitch(lib) {
+      viewSwitchEl.replaceChildren();
+      const views = lib?.views || [];
+      viewSwitchEl.hidden = views.length < 2;
+      for (const candidate of views) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.setAttribute('role', 'tab');
+        button.setAttribute('aria-selected', String(candidate.id === currentView));
+        button.textContent = candidate.label;
+        button.addEventListener('click', () => {
+          if (candidate.id === currentView) return;
+          if (searchState) showSearchResults(lib, candidate.id); else openLibrary(lib, candidate.id);
+        });
+        viewSwitchEl.appendChild(button);
+      }
+      gridControlsEl.hidden = viewSwitchEl.hidden;
+    }
+
+    // A library's items, a page at a time when it has several ways of being listed (a
+    // music library's tracks can number in the tens of thousands). `onPage` gets everything
+    // loaded so far and the total. A source that does not page answers with all of it at once.
+    const LIBRARY_PAGE = 1000;
+    async function fetchLibraryItems(lib, listView, { signal, onPage } = {}) {
+      if (lib.type === 'playlists') {
+        const playlists = await fetchJson('/api/library/playlists', { signal });
+        return { items: playlists, total: playlists.length };
+      }
+      const paged = !!listView || lib.type === 'music';
+      const base = `/api/library/library/${lib.id}?sort=titleSort${listView ? `&view=${encodeURIComponent(listView)}` : ''}`;
+      let items = [];
+      let total = Infinity;
+      while (items.length < total) {
+        const page = await fetchJson(paged ? `${base}&start=${items.length}&size=${LIBRARY_PAGE}` : base, { signal });
+        const got = page.items || [];
+        if (!items.length) total = Number.isFinite(page.total) ? page.total : got.length;
+        // A source that ignores paging returned everything; one that returns nothing ends the loop.
+        if (!got.length) break;
+        // A source that ignores `start` sends the same first page again: that is everything.
+        if (items.length && String(got[0].ratingKey) === String(items[0].ratingKey)) break;
+        items = items.concat(got);
+        if (!paged) break;
+        onPage?.(items, total);
+      }
+      return { items, total: Math.max(total === Infinity ? items.length : total, items.length) };
+    }
+
+    async function openLibrary(lib, wantedView = lib.id === currentLibraryId ? currentView : null) {
+      if (!keepsMusicPlaying(lib)) musicHost.stop(); // movies and shows are not music
+      endSearch();
       const view = viewGuard.begin();
       onLibraryPage = true;
       currentLibraryId = lib.id;
+      currentView = chooseView(lib, wantedView);
       rememberView();
-      backEl.style.display = 'none';
       closeActiveTab();
+      updateSearchPlaceholder();
       gridEl.style.display = '';
       renderContinueRow();
       recentRow.innerHTML = '';
       recentRow.scrollLeft = 0;
       showRecentSection(false);
       hideDetailHeader();
-      loadRecentlyAdded(lib.id);
+      if (lib.type !== 'playlists') loadRecentlyAdded(lib.id);
       [...librariesEl.children].forEach((btn) => btn.classList.toggle('active', btn.dataset.id === lib.id));
-      loadingEl.textContent = `Loading ${lib.title}…`;
+      showLoading();
       clearGrid();
+      renderViewSwitch(lib);
       try {
-        const { items } = await fetchJson(`/api/library/library/${lib.id}?sort=titleSort`, { signal: view.signal });
+        currentLibraryItems = [];
+        const { items, total } = await fetchLibraryItems(lib, currentView, {
+          signal: view.signal,
+          // The first page appears at once; the rest arrive behind it.
+          onPage: (loaded, all) => {
+            if (!view.isCurrent()) return;
+            clearLoading();
+            currentLibraryItems = loaded;
+            renderGrid(loaded, { total: all });
+          },
+        });
         if (!view.isCurrent()) return; // another tab was chosen while this was loading
-        loadingEl.textContent = '';
+        clearLoading();
         currentLibraryItems = items;
-        renderGrid(items);
+        renderGrid(items, { total });
       } catch (err) {
         if (!view.isCurrent() || wasAborted(err)) return;
-        loadingEl.textContent = `Failed to load: ${err.message}`;
+        showMessage(`Failed to load: ${err.message}`);
       }
     }
 
     async function openShowSeasons(ratingKey, title) {
+      endSearch(); // the results are left behind
       const view = viewGuard.begin();
       onLibraryPage = false;
       rememberView({ show: ratingKey });
       showContinueSection(false);
       showRecentSection(false);
       hideDetailHeader();
-      backEl.style.display = 'none'; // the back control lives on the detail header itself now, not the tab row
       const onBack = () => {
         const lib = libraries.find((l) => l.id === currentLibraryId);
         if (lib) openLibrary(lib);
       };
-      loadingEl.textContent = `Loading ${title}…`;
+      showLoading();
       clearGrid();
       try {
         const [seasons, showItem] = await Promise.all([
@@ -791,39 +1478,191 @@
           fetchJson(`/api/library/item/${ratingKey}`, { signal: view.signal }).catch(() => null),
         ]);
         if (!view.isCurrent()) return;
-        loadingEl.textContent = '';
-        if (seasons.length === 1) {
+        clearLoading();
+        if (seasons.length === 1 && showItem?.type !== 'artist') {
           // Skip the seasons screen when there's nothing to choose between;
           // back should return straight to the library, not loop through it.
           openSeason(seasons[0], { skippedSeasons: true });
           return;
         }
         if (showItem) {
-          renderDetailHeader(showItem, { onBack });
-        } else {
-          // The show's own details failed to load -- fall back to the tab
-          // row's back control so there's still some way out.
-          showBack(onBack);
+          // Play on an artist shuffles all its tracks, as Plex does.
+          const actions = showItem.type === 'artist' ? {
+            playLabel: 'Play',
+            playTitle: 'Plays this artist\'s tracks in shuffled order',
+            async play() {
+              try {
+                const tracks = await fetchJson(`/api/library/show/${ratingKey}/episodes`);
+                playQueue({ label: showItem.title, items: tracks.filter((item) => item.type === 'track'), shuffle: true });
+              } catch (err) { showLoadError(err); }
+            },
+            // Radio: this artist's tracks mixed with tracks by artists like it, as Plex's artist radio does.
+            radioTitle: `Plays ${showItem.title} and artists like it`,
+            radio: () => startRadio(showItem, ratingKey),
+          } : null;
+          renderDetailHeader(showItem, { onBack, actions });
         }
+        // (If the show's own details failed to load there is no header, and no back control either: the library
+        // tabs along the top are the way out.)
         renderGrid(seasons);
+        if (showItem?.type === 'artist') {
+          // Extras: whatever goes wrong with them, the albums above stay and nothing is reported.
+          optionalSection(() => loadPopularTracks(ratingKey, view, showItem.title));
+          optionalSection(() => loadSimilarArtists(ratingKey, view));
+        }
       } catch (err) {
         if (!view.isCurrent() || wasAborted(err)) return;
-        loadingEl.textContent = `Failed to load: ${err.message}`;
+        showMessage(`Failed to load: ${err.message}`);
+      }
+    }
+
+    // Run an extra part of a screen so that it can never break the rest: its failure, even an error in the
+    // code that draws it, is not shown.
+    function optionalSection(run) {
+      try { Promise.resolve(run()).catch(() => {}); } catch { /* left out */ }
+    }
+
+    // Artist radio: some of the artist's own tracks and a few of each of several similar artists', mixed. The
+    // queue remembers the artist, so the player can keep adding to it as it runs low.
+    async function startRadio(artist, artistKey) {
+      const button = document.getElementById('detailRadio');
+      button.disabled = true;
+      try {
+        const items = await gatherRadio({ fetchJson, artistKey });
+        if (!items.length) { showMessage('There is nothing to play for this artist'); button.disabled = false; return; }
+        playQueue({ label: `${artist.title} Radio`, items, radio: { artistKey } });
+      } catch (err) { button.disabled = false; showLoadError(err); }
+    }
+
+    // An artist's most played tracks above its albums: the first few, with the rest behind Show More.
+    // Tapping one plays them from that one on. Like the rows of similar artists, they are extra: if they
+    // cannot be had, nothing is said and the page is as it was.
+    const POPULAR_PREVIEW = 5;
+    async function loadPopularTracks(artistKey, view, artistTitle) {
+      try {
+        const tracks = await fetchJson(`/api/library/popular/${artistKey}`, { signal: view.signal });
+        if (!view.isCurrent() || !Array.isArray(tracks) || !tracks.length) return;
+        // Each row says which album the track is on (the artist is the page's), and plays the list from it.
+        const rows = tracks.map((track, index) => ({
+          ...track,
+          artist: track.album || null,
+          onPlay: () => playQueue({ label: `${artistTitle} — Popular`, items: tracks, start: index }),
+        }));
+        let all = false;
+        const draw = () => {
+          popularListEl.replaceChildren(...(all ? rows : rows.slice(0, POPULAR_PREVIEW)).map((row) => buildCard(row, true)));
+          popularMoreEl.hidden = rows.length <= POPULAR_PREVIEW;
+          popularMoreEl.textContent = all ? 'Show Less' : 'Show More';
+          popularMoreEl.setAttribute('aria-expanded', String(all));
+        };
+        popularMoreEl.onclick = () => { all = !all; draw(); };
+        draw();
+        popularEl.hidden = false;
+      } catch { /* no popular tracks: no section, and no message */ }
+    }
+
+    // Rows of artists like this one, under its albums. They are a nicety: if Plex has none, or they
+    // are slow, the page is as it was.
+    async function loadSimilarArtists(artistKey, view) {
+      let sections = [];
+      try { sections = (await fetchJson(`/api/library/similar/${artistKey}`, { signal: view.signal })).sections || []; } catch { return; }
+      if (!view.isCurrent()) return;
+      similarEl.replaceChildren();
+      const rows = [];
+      for (const section of sections) {
+        if (!section.items?.length) continue;
+        const wrapper = document.createElement('div');
+        wrapper.className = 'similarSection';
+        const heading = document.createElement('h2');
+        heading.textContent = section.title;
+        // A carousel: a row that scrolls sideways, with buttons at its ends when there is more to see.
+        const carousel = document.createElement('div');
+        carousel.className = 'carousel';
+        const row = document.createElement('div');
+        row.className = 'carouselRow';
+        const button = (direction) => {
+          const control = document.createElement('button');
+          control.type = 'button';
+          control.className = `carouselBtn ${direction}`;
+          control.hidden = true;
+          control.setAttribute('aria-label', direction === 'prev' ? 'Scroll left' : 'Scroll right');
+          control.append(iconEl(direction === 'prev' ? 'chevron-left' : 'chevron-right'));
+          return control;
+        };
+        for (const artist of section.items) row.append(buildArtistCard(artist));
+        carousel.append(button('prev'), row, button('next'));
+        wrapper.append(heading, carousel);
+        similarEl.append(wrapper);
+        setupCarousel(row);
+        rows.push(row);
+      }
+      // The buttons depend on how wide the rows turned out to be.
+      requestAnimationFrame(() => rows.forEach((row) => row.updateCarouselButtons?.()));
+    }
+
+    // An artist as a card in a carousel: its picture and name, opening its page.
+    function buildArtistCard(artist) {
+      const card = document.createElement('div');
+      card.className = 'recentCard artist';
+      const wrap = document.createElement('div');
+      wrap.className = 'thumbWrap';
+      const img = document.createElement('img');
+      img.loading = 'lazy';
+      img.src = artist.thumbnail || '';
+      img.alt = '';
+      wrap.append(img);
+      const title = document.createElement('div');
+      title.className = 'title';
+      title.textContent = artist.title;
+      card.append(wrap, title);
+      card.addEventListener('click', () => handleItemClick(artist));
+      return card;
+    }
+
+    // A playlist: its tracks, with Play and Shuffle, like an album.
+    async function openPlaylist(playlist) {
+      endSearch(); // the results are left behind
+      const view = viewGuard.begin();
+      onLibraryPage = false;
+      rememberView(); // a playlist is not an artist or album: reloading returns to the list of them
+      showContinueSection(false);
+      showRecentSection(false);
+      hideDetailHeader();
+      const onBack = () => { const lib = libraries.find((l) => l.id === currentLibraryId); if (lib) openLibrary(lib); };
+      showLoading();
+      clearGrid();
+      try {
+        const tracks = await fetchJson(`/api/library/playlist/${playlist.ratingKey}/items`, { signal: view.signal });
+        if (!view.isCurrent()) return;
+        if (tracks.length) clearLoading(); else showMessage('This playlist is empty');
+        currentQueueLabel = playlist.title;
+        renderDetailHeader({ title: playlist.title, thumbnail: playlist.thumbnail, genres: [], summary: '' }, {
+          subtitle: [`${tracks.length} tracks`, playlist.duration ? `${playlist.duration} min` : null].filter(Boolean).join(' · '),
+          onBack,
+          actions: tracks.length ? {
+            play: () => playQueue({ label: playlist.title, items: tracks }),
+            shuffle: () => playQueue({ label: playlist.title, items: tracks, shuffle: true }),
+          } : null,
+        });
+        renderGrid(tracks, { episode: true });
+      } catch (err) {
+        if (!view.isCurrent() || wasAborted(err)) return;
+        showMessage(`Failed to load: ${err.message}`);
       }
     }
 
     async function openSeason(season, { skippedSeasons = false } = {}) {
+      endSearch(); // the results are left behind
       const view = viewGuard.begin();
       onLibraryPage = false;
       rememberView({ show: season.showRatingKey || null, season: season.ratingKey });
       showContinueSection(false);
       showRecentSection(false);
       hideDetailHeader();
-      backEl.style.display = 'none';
       const onBack = skippedSeasons
         ? () => { const lib = libraries.find((l) => l.id === currentLibraryId); if (lib) openLibrary(lib); }
         : () => openShowSeasons(season.showRatingKey, season.showTitle);
-      loadingEl.textContent = `Loading ${season.showTitle} — ${season.title}…`;
+      showLoading();
       clearGrid();
       try {
         const [episodes, showItem] = await Promise.all([
@@ -831,75 +1670,164 @@
           season.showRatingKey ? fetchJson(`/api/library/item/${season.showRatingKey}`, { signal: view.signal }).catch(() => null) : null,
         ]);
         if (!view.isCurrent()) return;
-        loadingEl.textContent = '';
+        clearLoading();
+        // An album (or playlist) of tracks can be played from its start, or shuffled.
+        const tracks = episodes.filter((item) => item.type === 'track');
+        if (tracks.length) currentQueueLabel = season.title;
+        const actions = tracks.length ? {
+          play: () => playQueue({ label: season.title, items: tracks }),
+          shuffle: () => playQueue({ label: season.title, items: tracks, shuffle: true }),
+        } : null;
         if (showItem) {
-          renderDetailHeader(showItem, { subtitle: season.title, poster: season.thumbnail, onBack });
-        } else {
-          showBack(onBack);
+          renderDetailHeader(showItem, { subtitle: season.title, poster: season.thumbnail, onBack, actions });
         }
         renderGrid(episodes, { episode: true });
       } catch (err) {
         if (!view.isCurrent() || wasAborted(err)) return;
-        loadingEl.textContent = `Failed to load: ${err.message}`;
+        showMessage(`Failed to load: ${err.message}`);
       }
     }
 
     // Filter the loaded library items; plugin tabs manage their own content.
-    async function runSearch(query) {
-      if (activePluginTab?.onSearch) {
-        activePluginTab.onSearch(query);
-        return;
+    // ---- Search ----
+    // A search looks through every library's list, not only the tab that is open. Each tab shows how many results it
+    // has, the tab whose results are on screen is lit, and choosing another tab shows the results in that one.
+    // `searchState` lives from the first search until the person leaves the results (Back, an empty search, opening
+    // something, or another kind of tab); the lists it fetched are kept for the next search made meanwhile.
+    let searchState = null; // { query, lists: Map(key -> Promise of the library's items), views: Map(lib id -> view) }
+    const searchKey = (lib, view) => `${lib.id}|${view ?? ''}`;
+    // Every word typed must be found, in any order, in the title, artist, album, show or year (accents and case ignored).
+    const searchMatches = (items, query) => filterItems(items, query);
+    function searchListFor(lib, view) {
+      const key = searchKey(lib, view);
+      if (!searchState.lists.has(key)) {
+        const list = fetchLibraryItems(lib, view).then(({ items }) => items);
+        list.catch(() => searchState?.lists.delete(key)); // a failed fetch is tried again next time
+        searchState.lists.set(key, list);
       }
+      return searchState.lists.get(key);
+    }
+    const searchViewOf = (lib) => searchState.views.get(lib.id) ?? chooseView(lib, lib.id === currentLibraryId ? currentView : null);
+    function tabButton(lib) { return [...librariesEl.children].find((btn) => btn.dataset.id === lib.id); }
+    function setTabCount(lib, count) {
+      const button = tabButton(lib);
+      if (!button) return;
+      let badge = button.querySelector('.searchCount');
+      if (!badge) { badge = document.createElement('span'); badge.className = 'searchCount'; button.append(badge); }
+      badge.textContent = count === null ? '…' : count === undefined ? '–' : String(count);
+      badge.classList.toggle('none', count === 0 || count === undefined);
+      badge.setAttribute('aria-label', count === null ? 'searching' : count === undefined ? 'could not be searched' : `${count} ${count === 1 ? 'result' : 'results'}`);
+    }
+    function clearTabCounts() { for (const badge of librariesEl.querySelectorAll('.searchCount')) badge.remove(); }
+    function endSearch() {
+      if (!searchState) return;
+      searchState = null;
+      clearTabCounts();
+      updateSearchPlaceholder();
+    }
+    function exitSearch() {
+      const lib = libraries.find((l) => l.id === currentLibraryId) || libraries[0];
+      endSearch();
+      if (lib) openLibrary(lib);
+    }
+    // Count the results of every tab: the one open first, then the rest, one at a time.
+    async function countSearchResults(state) {
+      const ordered = [...libraries].sort((a, b) => (b.id === currentLibraryId) - (a.id === currentLibraryId));
+      for (const lib of ordered) {
+        if (searchState !== state) return;
+        const view = searchViewOf(lib);
+        setTabCount(lib, null);
+        try {
+          const items = await searchListFor(lib, view);
+          if (searchState === state) setTabCount(lib, searchMatches(items, state.query).length);
+        } catch { if (searchState === state) setTabCount(lib, undefined); }
+      }
+    }
+    async function showSearchResults(lib, wantedView) {
+      if (!searchState) return;
+      const state = searchState;
       const view = viewGuard.begin(); // results replace whatever was still loading
+      currentLibraryId = lib.id;
+      currentView = chooseView(lib, wantedView);
+      state.views.set(lib.id, currentView);
       onLibraryPage = false;
       rememberView(); // results are not a place to come back to, so the address is the library's
       showContinueSection(false);
       showRecentSection(false);
       hideDetailHeader();
       closeActiveTab();
+      updateSearchPlaceholder();
       gridEl.style.display = '';
-      [...librariesEl.children].forEach((btn) => btn.classList.remove('active'));
-      showBack(() => {
-        const lib = libraries.find((l) => l.id === currentLibraryId) || libraries[0];
-        if (lib) openLibrary(lib);
+      [...librariesEl.children].forEach((btn) => {
+        const selected = btn.dataset.id === lib.id;
+        btn.classList.toggle('active', selected);
+        if (selected) btn.setAttribute('aria-current', 'true'); else btn.removeAttribute('aria-current');
       });
-      // A page restored on a show or season has not loaded the library's list yet.
-      if (!currentLibraryItems.length && currentLibraryId) {
-        loadingEl.textContent = 'Searching…';
-        clearGrid();
-        try {
-          currentLibraryItems = (await fetchJson(`/api/library/library/${currentLibraryId}?sort=titleSort`, { signal: view.signal })).items;
-        } catch (err) {
-          if (!view.isCurrent() || wasAborted(err)) return;
-          loadingEl.textContent = `Failed to load: ${err.message}`;
-          return;
-        }
-        if (!view.isCurrent()) return;
-      }
-      const q = query.trim().toLowerCase();
-      const results = currentLibraryItems.filter((item) => item.title.toLowerCase().includes(q));
-      loadingEl.textContent = results.length ? '' : `No results for "${query}"`;
+      showLoading();
       clearGrid();
+      renderViewSwitch(lib);
+      let items;
+      try {
+        items = await searchListFor(lib, currentView);
+      } catch (err) {
+        if (!view.isCurrent() || wasAborted(err)) return;
+        showMessage(`Failed to load: ${err.message}`);
+        return;
+      }
+      if (!view.isCurrent() || searchState !== state) return;
+      const results = searchMatches(items, state.query);
+      setTabCount(lib, results.length);
+      // The tab counts say how many there are; words are only for when there is nothing here.
+      if (results.length) clearLoading();
+      else showMessage(`No results for "${state.query}" in ${searchScope() ?? 'this tab'}. The other tabs show how many they have.`);
       renderGrid(results);
     }
+    async function runSearch(query) {
+      if (activePluginTab?.onSearch) {
+        activePluginTab.onSearch(query);
+        return;
+      }
+      const lib = libraries.find((candidate) => candidate.id === currentLibraryId) || libraries[0];
+      if (!lib) return;
+      // A new search keeps the lists already fetched by one made a moment ago.
+      searchState = { query: query.trim(), lists: searchState?.lists ?? new Map(), views: searchState?.views ?? new Map() };
+      const state = searchState;
+      for (const other of libraries) if (!tabButton(other)?.querySelector('.searchCount')) setTabCount(other, null);
+      void countSearchResults(state);
+      await showSearchResults(lib, lib.id === currentLibraryId ? currentView : null);
+    }
 
+    // The × in the box empties it and, if results are showing, leaves them (back to the library that was open).
+    const searchClearEl = document.getElementById('searchClear');
+    const syncSearchClear = () => { searchClearEl.hidden = !searchInput.value; };
+    function clearSearch() {
+      searchInput.value = '';
+      syncSearchClear();
+      if (searchState) exitSearch();
+      searchInput.focus();
+    }
+    searchInput.addEventListener('input', syncSearchClear);
+    searchInput.addEventListener('keydown', (event) => { if (event.key === 'Escape' && (searchInput.value || searchState)) { event.preventDefault(); clearSearch(); } });
+    searchClearEl.addEventListener('click', clearSearch);
     searchForm.addEventListener('submit', (ev) => {
       ev.preventDefault();
       const query = searchInput.value.trim();
       if (query) runSearch(query);
+      else if (searchState) exitSearch(); // clearing the box and searching again leaves the results
     });
 
     // Go straight to a show's seasons, or to one season's episodes, as when the page
     // was left. The library tab it belongs to stays highlighted and is where Back goes.
-    async function restoreShowView(lib, showKey, seasonKey) {
+    async function restoreShowView(lib, showKey, seasonKey, wantedView = null) {
       currentLibraryId = lib.id;
+      currentView = chooseView(lib, wantedView); // Back from the show returns to the list it was reached from
       [...librariesEl.children].forEach((btn) => btn.classList.toggle('active', btn.dataset.id === lib.id));
       gridEl.style.display = '';
       if (!seasonKey) return openShowSeasons(showKey, 'this show');
       // The show's season list has everything a season needs, and says whether
       // the show has just one season (which skips the season list).
       const view = viewGuard.begin();
-      loadingEl.textContent = 'Loading…';
+      showLoading();
       try {
         const seasons = await fetchJson(`/api/library/show/${showKey}/seasons`, { signal: view.signal });
         if (!view.isCurrent()) return;
@@ -913,15 +1841,24 @@
     }
 
     async function main() {
-      loadingEl.textContent = 'Loading libraries…';
-      libraries = await fetchJson('/api/library/libraries');
-      loadingEl.textContent = '';
+      showLoading();
+      // Music comes first.
+      libraries = orderLibraries(await fetchJson('/api/library/libraries'));
+      // Playlists (of music) are not in a library but on the server; they get a tab of their own, after music.
+      try {
+        if ((await fetchJson('/api/library/playlists')).length) {
+          const after = libraries.findIndex((lib) => lib.type !== 'music');
+          libraries.splice(after < 0 ? libraries.length : after, 0, { id: 'playlists', title: 'Playlists', type: 'playlists' });
+        }
+      } catch { /* this source has none */ }
+      clearLoading();
       librariesEl.innerHTML = '';
       for (const lib of libraries) {
         const btn = document.createElement('button');
         btn.textContent = lib.title;
         btn.dataset.id = lib.id;
-        btn.addEventListener('click', () => openLibrary(lib));
+        // While searching, a tab shows its results; otherwise it opens the library.
+        btn.addEventListener('click', () => { if (searchState) showSearchResults(lib, searchViewOf(lib)); else openLibrary(lib); });
         librariesEl.appendChild(btn);
       }
       for (const tab of getTabs()) {
@@ -932,19 +1869,24 @@
         librariesEl.appendChild(btn);
       }
 
-      const { tab: requestedTab, show: requestedShow, season: requestedSeason } = readBrowseView(location.search);
+      const { tab: addressTab, view: addressView, show: requestedShow, season: requestedSeason } = readBrowseView(location.search);
+      // The address wins. With no tab in it, go back to the last tab (and that library's view), if it is still there.
+      const remembered = tabStorage ? readTabMemory(tabStorage) : { tab: null, views: {} };
+      const requestedTab = addressTab ?? startingTab(remembered, [...libraries.map((l) => l.id), ...getTabs().map((tab) => tab.id)]);
+      const requestedView = addressTab ? addressView : (remembered.views[requestedTab] ?? null);
       const requestedLibrary = libraries.find((l) => l.id === requestedTab);
       const requestedPluginTab = getTab(requestedTab);
       if (requestedPluginTab) {
         openPluginTab(requestedPluginTab);
       } else if (requestedShow && libraries.length) {
         // A reload (or Back from the player) on a show or season returns there.
-        restoreShowView(requestedLibrary || libraries[0], requestedShow, requestedSeason);
+        restoreShowView(requestedLibrary || libraries[0], requestedShow, requestedSeason, requestedView);
       } else if (requestedLibrary) {
-        openLibrary(requestedLibrary);
+        openLibrary(requestedLibrary, requestedView);
       } else if (libraries.length) {
         openLibrary(libraries[0]);
       }
+      musicHost.restore();
       loadContinueWatching();
     }
 
