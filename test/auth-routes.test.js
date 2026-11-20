@@ -207,6 +207,25 @@ test('a new sign-in after logging out everywhere works', async () => {
   assert.notEqual(refused.status, 200);
 });
 
+test('a signed-in viewer who opens the sign-in page goes on to the player', async () => {
+  const start = await request('/api/auth/plex/pin', { method: 'POST' });
+  const loginCookie = cookieFrom(start, 'freeStuffCrazyPlayerLogin');
+  const pickerCookie = cookieFrom(await request(`/api/auth/plex/poll?id=${start.json.id}`, { cookie: loginCookie }), 'freeStuffCrazyPlayerLogin');
+  const selection = await request('/api/auth/plex/select-user', {
+    method: 'POST', cookie: pickerCookie, body: { pinId: start.json.id, userId: '20' },
+  });
+  const cookie = cookieFrom(selection, 'freeStuffCrazyPlayerSession');
+  for (const [url, location] of [['/login', '/browse'], ['/login.html', '/browse'],
+    ['/login?return=%2Fcanvas2%3Fkey%3D7', '/canvas2?key=7'], ['/login?return=https%3A%2F%2Fevil.example%2Fbrowse', '/browse'],
+    ['/login?return=%2Fadmin', '/browse']]) {
+    const page = await request(url, { cookie });
+    assert.equal(page.status, 302, url);
+    assert.equal(page.headers.location, location, url);
+  }
+  assert.equal((await request('/login')).status, 200, 'signed out, the sign-in page loads');
+  assert.equal((await request('/login', { cookie: 'freeStuffCrazyPlayerSession=%zz' })).status, 200, 'and so with a bad cookie');
+});
+
 test('auth namespace is not generally public and malformed cookies are harmless', async () => {
   assert.equal((await request('/api/auth/home-users')).status, 401);
   assert.equal((await request('/api/playback-speed')).status, 401);
