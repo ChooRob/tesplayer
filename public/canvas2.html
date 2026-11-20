@@ -235,6 +235,13 @@
 
     #seekBar { flex: 1; accent-color: #0a84ff; height: 24px; cursor: pointer; }
     #timeLabel { color: #fff; font-family: monospace; font-size: 13px; flex-shrink: 0; font-weight: 600; letter-spacing: 0.5px; white-space: nowrap; }
+    /* Below desktop widths (a Tesla's screen included) a queue's buttons and captions do not all fit beside the seek
+       bar, so the seek bar and the time take a row of their own above the buttons. */
+    @media (max-width: 1100px) {
+      #controls { flex-wrap: wrap; row-gap: 8px; }
+      #seekBar, #timeLabel { order: -1; }
+      #seekBar { flex-basis: calc(100% - 140px); }
+    }
     #timeLabel.live-indicator {
       /* Centers the red dot and the word on one line, at the height of the buttons. */
       display: inline-flex; align-items: center; justify-content: center; gap: 8px;
