@@ -151,6 +151,7 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
       duration: m.duration ? Math.round(m.duration / 60000) : null,
       durationMs: m.duration || null,
       viewOffset: m.viewOffset || 0,
+      viewCount: m.viewCount || 0,
       thumbnail: thumbnailProxyUrl(m.thumb, 'landscape'),
       videoCodec: media?.videoCodec,
     };

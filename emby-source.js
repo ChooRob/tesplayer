@@ -414,6 +414,8 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
   const TYPES = { Movie: 'movie', Series: 'show', Season: 'season', Episode: 'episode' };
   const typeOf = item => TYPES[item.Type] || String(item.Type || '').toLowerCase();
   const viewOffset = item => ms(item.UserData?.PlaybackPositionTicks) || 0;
+  // Plex's field: times watched, 0 for unwatched. Played is what marking watched sets.
+  const viewCount = item => (item.UserData?.Played ? Math.max(1, item.UserData.PlayCount || 0) : 0);
   function episodeCounts(item) {
     const leafCount = item.RecursiveItemCount ?? item.ChildCount;
     if (!Number.isFinite(leafCount)) return {};
@@ -467,6 +469,7 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
       duration: minutes(item.RunTimeTicks),
       durationMs: ms(item.RunTimeTicks),
       viewOffset: viewOffset(item),
+      viewCount: viewCount(item),
       thumbnail: thumbnailUrl(item, 'Primary', 'landscape'),
     };
   }

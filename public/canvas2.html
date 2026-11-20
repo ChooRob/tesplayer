@@ -1418,6 +1418,7 @@
       // point where the item counts as watched, and the next episode starts by
       // itself when this one ends.
       let nextEpisode = null;
+      let fetchedNext = null; // what the server says follows, for when no queue does
       let watchedAt = 0.9;
       let movingOn = false;
       const playNextBtn = document.getElementById('playNextBtn');
@@ -1432,7 +1433,8 @@
       // The queue the browse page made when Play was pressed (an artist, album or playlist), if the
       // address names one; otherwise the album is read below.
       let queueData = null;
-      try { const id = urlParams.get('queue'); if (id) queueData = readQueue(sessionStorage, id); } catch { /* none */ }
+      // (Videos queued the same way come with `videoQueue`, since `queue` means music from the first moment.)
+      try { const id = urlParams.get('queue') || urlParams.get('videoQueue'); if (id) queueData = readQueue(sessionStorage, id); } catch { /* none */ }
       function goToQueueIndex(index) {
         const track = queue[index];
         if (!track) return;
@@ -1526,6 +1528,26 @@
         document.getElementById('musicQueueLabel').textContent = `${queueData.shuffled ? 'Shuffled' : 'Playing from'} · ${queue.length} tracks`;
         renderQueue();
         syncQueueButtons();
+        if (!isMusic) showVideoQueue();
+      }
+      // Videos queued by Play or Shuffle on the browse page: Previous and Next go through the queue, Play Next
+      // and its countdown move on to the next in it, and shuffle and repeat work as they do for music.
+      let videoTitle = '';
+      function startVideoQueue() {
+        queueIndex = positionOf(queueData, itemKey);
+        if (queueIndex < 0) { queueData = null; nextEpisode = fetchedNext; updateNextButton(); return; }
+        queue = queueData.items;
+        prevTrackBtn.hidden = false;
+        nextTrackBtn.hidden = false;
+        showVideoQueue();
+      }
+      function showVideoQueue() {
+        const at = nextPosition(withIndex(queueData, queueIndex), { auto: true });
+        const next = at === null ? null : queue[at];
+        nextEpisode = next ? { ratingKey: next.ratingKey, title: next.title, season: next.season ?? null, episode: next.episode ?? null } : null;
+        titleDisplayEl.textContent = `${queueData.shuffled ? 'Shuffled' : 'Playing'} · ${queueIndex + 1} of ${queue.length} · ${videoTitle}`;
+        syncQueueButtons();
+        updateNextButton();
       }
       shuffleBtn.addEventListener('click', () => { if (queueData) changeQueue(queueData.shuffled ? unshuffleQueue(withIndex(queueData, queueIndex)) : shuffleQueue(withIndex(queueData, queueIndex))); });
       repeatBtn.addEventListener('click', () => {
@@ -1967,7 +1989,7 @@
           playNextBtn.classList.add('counting');
           playNextLabel.textContent = `Playing next in ${seconds}`;
         },
-        onDone: () => playNextEpisode(),
+        onDone: () => playNextEpisode({ auto: true }),
       });
       function resetNextButton() {
         playNextLabel.textContent = 'Play Next';
@@ -2000,8 +2022,8 @@
         declinedNext = false;
         if (nextCountdown.cancel()) resetNextButton();
       }
-      function playNextEpisode() {
-        if (isMusic && queue.length) { goNext({ auto: false }); return; }
+      function playNextEpisode({ auto = false } = {}) {
+        if (queue.length) { goNext({ auto }); return; }
         if (nextEpisode) goToItem(nextEpisode.ratingKey);
       }
       function goToItem(ratingKey, { queue: queueId = null } = {}) {
@@ -2011,7 +2033,7 @@
         discardNextPlan();
         const target = new URL('/canvas2', location.origin);
         target.searchParams.set('key', ratingKey);
-        if (queueId) target.searchParams.set('queue', queueId);
+        if (queueId) target.searchParams.set(isMusic ? 'queue' : 'videoQueue', queueId);
         if (embedded) target.searchParams.set('embedded', '1');
         // Keep where we came from and how the viewer plays; quality is chosen afresh.
         for (const name of ['playback']) {
@@ -2021,7 +2043,7 @@
         carryBrowseView(location.search, target.searchParams, { keepSeason: false });
         location.replace(target);
       }
-      playNextBtn.addEventListener('click', playNextEpisode);
+      playNextBtn.addEventListener('click', () => playNextEpisode());
       cancelNextBtn.addEventListener('click', cancelNextCountdown);
 
       // What the screen, the bar and the media controls show for the track playing now.
@@ -2084,7 +2106,8 @@
           .then((res) => (res.ok ? res.json() : null))
           .then((data) => {
             if (!data) return;
-            nextEpisode = data.next || null;
+            fetchedNext = data.next || null;
+            if (!queueData) nextEpisode = fetchedNext;
             if (data.watchedAt > 0 && data.watchedAt <= 1) watchedAt = data.watchedAt;
             updateNextButton();
           }).catch(() => {});
@@ -2096,9 +2119,11 @@
               showMusicTrack(item, { initial: true });
               return;
             }
-            titleDisplayEl.textContent = item.showTitle
+            videoTitle = item.showTitle
               ? `${item.showTitle} — S${item.season}E${item.episode} ${item.title}`
               : item.title;
+            titleDisplayEl.textContent = videoTitle;
+            if (queueData && urlParams.has('videoQueue')) startVideoQueue();
             mediaControls.setMetadata({
               title: item.title,
               artist: item.showTitle || (item.year ? String(item.year) : ''),

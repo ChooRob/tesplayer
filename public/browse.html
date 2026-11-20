@@ -249,13 +249,18 @@
     #detailMeta span { white-space: nowrap; }
     #detailMeta .badge { border: 1px solid #666; border-radius: 4px; padding: 2px 6px; font-size: 11px; }
     #detailGenres { margin-bottom: 10px; color: #999; font-size: 12px; }
-    /* Play and Shuffle for an artist, album or playlist. */
+    /* Play and Shuffle for an artist, album, playlist, show or season. */
     #detailActions { display: flex; gap: 10px; margin: 6px 0 14px; flex-wrap: wrap; }
     #detailActions[hidden] { display: none; }
     #detailActions button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 20px; border: 0; border-radius: 8px; background: #2c2c2c; color: #eee; font-size: 15px; font-weight: 600; cursor: pointer; }
     /* The rule above sets display on the buttons, which would otherwise win over the hidden attribute (Shuffle and Radio use it). */
     #detailActions button[hidden] { display: none; }
     #detailActions button.primary { background: #e5a00d; color: #111; }
+    /* The same two buttons above a movie library's grid. */
+    #libraryActions { display: flex; gap: 10px; flex-wrap: wrap; }
+    #libraryActions[hidden] { display: none; }
+    #libraryActions button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 20px; border: 0; border-radius: 8px; background: #2c2c2c; color: #eee; font-size: 15px; font-weight: 600; cursor: pointer; }
+    #libraryActions button.primary { background: #e5a00d; color: #111; }
     #detailActions button:disabled { opacity: .5; cursor: default; }
     /* A long biography takes three lines until the viewer asks for the rest, so the albums sit near the top. */
     #detailSummary { font-size: 13px; line-height: 1.5; color: #ddd; max-width: 700px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
@@ -363,6 +368,10 @@
   </div>
   <div id="gridControls" hidden>
     <div id="viewSwitch" role="tablist" aria-label="List by" hidden></div>
+    <div id="libraryActions" hidden>
+      <button type="button" id="libraryPlay" class="primary"><span data-icon="play"></span>Play</button>
+      <button type="button" id="libraryShuffle"><span data-icon="shuffle"></span>Shuffle</button>
+    </div>
   </div>
   <!-- Under the Artists / Albums / Tracks switch, so it stays put while a list loads. -->
   <div id="loading"></div>
@@ -405,6 +414,7 @@
     import { filterItems } from "/browse-filter.js";
     import { clearSavedMusic, MUSIC_SESSION_KEY } from "/saved-music.js";
     import { createQueue, saveQueue, readQueue, MAX_QUEUE } from "/music-queue.js";
+    import { isResumable, onDeckIndex } from "/on-deck.js";
     import { gatherRadio } from "/music-radio.js";
     import { LETTERS, letterIndex, targetIndex, LETTER_BAR_MIN_ITEMS } from "/letter-index.js";
     import { MUSIC_MESSAGE, fromFrame, cleanState, keepsMusicPlaying, clock as clockOf } from "/music-host.js";
@@ -452,6 +462,7 @@
     const searchForm = document.getElementById('searchForm');
     const searchInput = document.getElementById('searchInput');
     const gridControlsEl = document.getElementById('gridControls');
+    const libraryActionsEl = document.getElementById('libraryActions');
     const similarEl = document.getElementById('similarSections');
     const popularEl = document.getElementById('popularSection');
     const popularListEl = document.getElementById('popularList');
@@ -702,16 +713,14 @@
       loadingEl.replaceChildren(message, action);
     }
 
-    function isResumable(item) {
-      return item.viewOffset > 5000 && item.durationMs && item.viewOffset < item.durationMs - 30000;
+    // Resume a bit before the stored offset so we don't drop the last line of dialogue.
+    function setResume(params, item) {
+      if (isResumable(item)) params.set('resume', String(Math.max(0, Math.floor(item.viewOffset / 1000) - 3)));
     }
 
     function playItem(item) {
       const params = new URLSearchParams({ key: item.ratingKey });
-      // Resume a bit before the stored offset so we don't drop the last line of dialogue.
-      if (isResumable(item)) {
-        params.set('resume', String(Math.max(0, Math.floor(item.viewOffset / 1000) - 3)));
-      }
+      setResume(params, item);
       // Carries the active tab, show and season through so the player's back link
       // can return straight to this screen (see canvas2.html).
       writeBrowseView(params, { tab: currentLibraryId, view: currentView, show: currentShowKey, season: currentSeasonKey });
@@ -896,7 +905,9 @@
     // Press Play: a queue of tracks is made (and kept for the player, a page per track) and the
     // first is played. An artist plays every track shuffled; an album or playlist plays in order,
     // or shuffled; a track plays its album, or whatever list it was in, from that track on.
-    function playQueue({ label = '', items, start = 0, shuffle = false, radio = null }) {
+    // Videos (`video`) play one after another in the player's own page, the first resuming where it was left
+    // unless shuffled.
+    function playQueue({ label = '', items, start = 0, shuffle = false, radio = null, video = false }) {
       // A very long list is cut around the track chosen rather than from its beginning.
       let list = items;
       let at = start;
@@ -912,9 +923,14 @@
       if (!queue.items.length) return;
       let saved = false;
       try { saved = saveQueue(sessionStorage, queue); } catch { /* the player then plays this track alone */ }
-      const params = new URLSearchParams({ key: queue.items[queue.index].ratingKey });
-      if (saved) params.set('queue', queue.id);
+      const first = queue.items[queue.index].ratingKey;
+      const params = new URLSearchParams({ key: first });
+      const firstItem = video && !shuffle ? list.find((item) => String(item.ratingKey) === first) : null;
+      if (firstItem) setResume(params, firstItem);
+      // The player takes `queue` to mean music from its first moment, so videos name their queue apart.
+      if (saved) params.set(video ? 'videoQueue' : 'queue', queue.id);
       writeBrowseView(params, { tab: currentLibraryId, view: currentView, show: currentShowKey, season: currentSeasonKey });
+      if (video) { window.location.href = `/canvas2?${params}`; return; }
       // Held in a frame, the music carries on while you browse; if this page cannot hold it, go to the player.
       if (saved && musicHost.supported()) { musicHost.start(params); return; }
       window.location.href = `/canvas2?${params}`;
@@ -1132,6 +1148,7 @@
       popularListEl.replaceChildren();
       gridState.all = [];
       gridState.items = [];
+      libraryActionsEl.hidden = true;
       gridControlsEl.hidden = true;
       viewSwitchEl.hidden = true;
       gridState.columns = 0;
@@ -1157,7 +1174,7 @@
       gridState.rowHeight = 0;
       gridState.renderedRange = null;
       updateLetterBar();
-      gridControlsEl.hidden = viewSwitchEl.hidden;
+      gridControlsEl.hidden = viewSwitchEl.hidden && libraryActionsEl.hidden;
       renderVirtualGridWindow();
       runPendingLetter();
     }
@@ -1384,7 +1401,7 @@
         });
         viewSwitchEl.appendChild(button);
       }
-      gridControlsEl.hidden = viewSwitchEl.hidden;
+      gridControlsEl.hidden = viewSwitchEl.hidden && libraryActionsEl.hidden;
     }
 
     // A library's items, a page at a time when it has several ways of being listed (a
@@ -1452,10 +1469,32 @@
         clearLoading();
         currentLibraryItems = items;
         renderGrid(items, { total });
+        offerLibraryPlay(lib);
       } catch (err) {
         if (!view.isCurrent() || wasAborted(err)) return;
         showMessage(`Failed to load: ${err.message}`);
       }
+    }
+
+    // Play and Shuffle above a movie library: its movies as listed (and filtered), from the top or shuffled.
+    function offerLibraryPlay(lib) {
+      const movies = () => gridState.items.filter((item) => item.type === 'movie');
+      libraryActionsEl.hidden = !(lib.type === 'movie' && movies().length > 1);
+      gridControlsEl.hidden = viewSwitchEl.hidden && libraryActionsEl.hidden;
+      document.getElementById('libraryPlay').onclick = () => playQueue({ label: lib.title, items: movies(), video: true });
+      document.getElementById('libraryShuffle').onclick = () => playQueue({ label: lib.title, items: movies(), shuffle: true, video: true });
+    }
+
+    // Play and Shuffle for a show's or a season's episodes. Play starts where Plex's Play would (see on-deck.js)
+    // and goes on in order; Shuffle mixes them all.
+    function episodeActions(label, loadEpisodes) {
+      const run = async (shuffle) => {
+        try {
+          const episodes = (await loadEpisodes()).filter((item) => item.type === 'episode');
+          if (episodes.length) playQueue({ label, items: episodes, start: shuffle ? 0 : onDeckIndex(episodes), shuffle, video: true });
+        } catch (err) { showLoadError(err); }
+      };
+      return { play: () => run(false), shuffle: () => run(true) };
     }
 
     async function openShowSeasons(ratingKey, title) {
@@ -1499,7 +1538,9 @@
             // Radio: this artist's tracks mixed with tracks by artists like it, as Plex's artist radio does.
             radioTitle: `Plays ${showItem.title} and artists like it`,
             radio: () => startRadio(showItem, ratingKey),
-          } : null;
+          // A whole show leaves out its specials, as Play Next does.
+          } : episodeActions(showItem.title, async () => (await fetchJson(`/api/library/show/${ratingKey}/episodes`))
+            .filter((item) => item.season !== 0));
           renderDetailHeader(showItem, { onBack, actions });
         }
         // (If the show's own details failed to load there is no header, and no back control either: the library
@@ -1674,10 +1715,11 @@
         // An album (or playlist) of tracks can be played from its start, or shuffled.
         const tracks = episodes.filter((item) => item.type === 'track');
         if (tracks.length) currentQueueLabel = season.title;
+        const videos = episodes.filter((item) => item.type === 'episode');
         const actions = tracks.length ? {
           play: () => playQueue({ label: season.title, items: tracks }),
           shuffle: () => playQueue({ label: season.title, items: tracks, shuffle: true }),
-        } : null;
+        } : videos.length ? episodeActions(season.title, async () => videos) : null;
         if (showItem) {
           renderDetailHeader(showItem, { subtitle: season.title, poster: season.thumbnail, onBack, actions });
         }
