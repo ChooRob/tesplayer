@@ -374,6 +374,7 @@
     /* Phones: keep the top bar on one line and clear of notches. */
     #topBar { top: max(16px, env(safe-area-inset-top)); left: max(16px, env(safe-area-inset-left)); right: max(16px, env(safe-area-inset-right)); }
     @media (max-width: 600px) {
+      #videoQueue { width: min(400px, calc(100vw - 24px)); }
       #topBar { gap: 6px; align-items: center; }
       #backLink, #topBarRight button, #watchedControls button {
         min-width: 44px; min-height: 44px; padding: 0 10px; font-size: 18px;
