@@ -125,6 +125,7 @@ test('VOD loading falls back once on direct failure and propagates proxy failure
       await result;
       assert.equal(context.vodLoading, false);
       assert.equal(hidden, mode === 'forced-proxy' ? 1 : 0, 'the waiting banner goes once the stream has started');
+      if (mode === 'direct-fails') assert.equal(context.waitingForServer, false, 'the fallback to the relay starts with no waiting banner up, so it can show its own');
     }
     assert.deepEqual(urls, mode === 'forced-proxy' ? ['/api/start?key=123']
       : mode === 'success' ? ['/api/start?key=123&direct=1']
@@ -148,4 +149,9 @@ test('Canvas playback never checks or attempts direct Plex delivery', async () =
   assert.equal(context.directAttempt, false);
   assert.equal(await context.directCapablePromise, false);
   assert.equal(fetches, 0);
+});
+
+test('the waiting banner goes up once, however often the player waits', () => {
+  const html = readFileSync(new URL('../public/canvas2.html', import.meta.url), 'utf8');
+  assert.match(html, /onMediaWait: \(\) => \{\s+if \(!vodLoading \|\| isLive\) return;\s+\/\/[^\n]*\n\s+if \(waitingForServer\) return;\s+waitingForServer = true;\s+log\('waiting for the media server…'\);\s+showBanner\('Waking the media server…', \{ persist: true \}\);/);
 });
