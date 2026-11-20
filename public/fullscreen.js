@@ -3,6 +3,9 @@ import { iconEl } from './icons.js';
 // Safari's video-only fullscreen is a fallback for Standard playback.
 const TESLA_TOKEN = /\bTesla(?:\/|\s)|\bQtCarBrowser\b/i;
 const OVERRIDE_KEY = 'freeStuffCrazyPlayer.tesla';
+const FULLSCREEN_HEIGHT_KEY = 'freeStuffCrazyPlayer.teslaFullscreenHeight';
+// Marks the address the Tesla way comes back to (see noteTeslaFullscreen).
+export const TESLA_RETURN_MARK = 'teslaFullscreen';
 
 function storageOf() {
   try { return globalThis.localStorage ?? null; } catch { return null; }
@@ -39,6 +42,28 @@ export function looksLikeCarBrowser({
   return linuxDesktop && (touchPoints > 0 || !!coarsePointer || !!noHover);
 }
 
+// The Tesla way leaves the car's browser in a fullscreen mode of its own, which a page can neither see nor leave
+// (the car's own control does that). The mark on the address it comes back to holds the window's height before; if
+// the window is now taller, it is in that mode, and the page notes the height. While the window is that tall the
+// button is not offered, since pressing it would only go round through YouTube again. A car that is not in Park
+// comes back without fullscreen, and then nothing is noted. A shorter window (fullscreen left) offers it again.
+export function noteTeslaFullscreen({ location = globalThis.location, history = globalThis.history, storage = storageOf(), height = globalThis.innerHeight } = {}) {
+  const url = new URL(location.href);
+  if (!url.searchParams.has(TESLA_RETURN_MARK)) return;
+  const before = Number(url.searchParams.get(TESLA_RETURN_MARK));
+  try {
+    if (before > 0 && Number.isFinite(height) && height > before) storage?.setItem(FULLSCREEN_HEIGHT_KEY, String(height));
+  } catch { /* not remembered */ }
+  url.searchParams.delete(TESLA_RETURN_MARK);
+  try { history?.replaceState(history.state, '', url.href); } catch { /* the mark stays in the address */ }
+}
+
+export function inTeslaFullscreen({ storage = storageOf(), height = globalThis.innerHeight } = {}) {
+  let noted = NaN;
+  try { noted = Number(storage?.getItem(FULLSCREEN_HEIGHT_KEY)); } catch { /* none */ }
+  return noted > 0 && Number.isFinite(height) && height >= noted - 2;
+}
+
 export function fullscreenMode(doc, video, tesla = false) {
   // Tesla always uses its dedicated path, irrespective of exposed browser APIs.
   if (tesla) return 'tesla';
@@ -67,10 +92,16 @@ export function fullscreenReturnUrl(url, playback) {
 export async function goFullscreen({
   doc = document, video = null, tesla = isTeslaBrowser(), navigate = url => { window.location.href = url; },
   url = window.location.href, playback = null, carLike = looksLikeCarBrowser(), settleMs = 250,
+  viewportHeight = () => globalThis.innerHeight,
 } = {}) {
   const mode = fullscreenMode(doc, video, tesla);
   // The Tesla way: a page on YouTube's domain puts the browser in fullscreen, then sends it back here.
-  const teslaWay = () => navigate(`https://www.youtube.com/redirect?q=${encodeURIComponent(fullscreenReturnUrl(url, playback))}`);
+  const teslaWay = () => {
+    const back = new URL(fullscreenReturnUrl(url, playback));
+    const height = viewportHeight();
+    back.searchParams.set(TESLA_RETURN_MARK, Number.isFinite(height) && height > 0 ? String(Math.round(height)) : '0');
+    return navigate(`https://www.youtube.com/redirect?q=${encodeURIComponent(back.href)}`);
+  };
   if (mode === 'tesla') return teslaWay();
   if (mode === 'exit-page') return (doc.exitFullscreen || doc.webkitExitFullscreen).call(doc);
   if (mode === 'exit-video') return video.webkitExitFullscreen();
@@ -81,11 +112,18 @@ export async function goFullscreen({
     // This looks like a car's browser, which may refuse or quietly ignore ordinary
     // fullscreen (and Canvas has no video of its own to fullscreen). If it did not
     // take, use the Tesla way; any other browser is never redirected.
+    // A Tesla can also say yes and change nothing on screen, so a window that did not get taller has not entered.
     let entered = false;
+    const before = viewportHeight();
     try {
       await request.call(doc.documentElement);
       if (settleMs) await new Promise(resolve => setTimeout(resolve, settleMs));
       entered = !!(doc.fullscreenElement || doc.webkitFullscreenElement);
+      const after = viewportHeight();
+      if (entered && Number.isFinite(before) && Number.isFinite(after) && after <= before) {
+        entered = false;
+        await (doc.exitFullscreen || doc.webkitExitFullscreen)?.call(doc)?.catch?.(() => {});
+      }
     } catch { /* refused */ }
     if (!entered) return teslaWay();
     return undefined;
@@ -96,6 +134,7 @@ export async function goFullscreen({
 
 export function setupFullscreenButton(btn, { video = null, getPlaybackState = () => null } = {}) {
   if (!btn) return;
+  noteTeslaFullscreen();
   const tesla = isTeslaBrowser();
   const status = document.createElement('span');
   status.setAttribute('role', 'status');
@@ -104,6 +143,8 @@ export function setupFullscreenButton(btn, { video = null, getPlaybackState = ()
   btn.after(status);
   btn.style.display = '';
   function update() {
+    if (inTeslaFullscreen()) { btn.style.display = 'none'; status.hidden = true; return; }
+    btn.style.display = '';
     const mode = fullscreenMode(document, video, tesla);
     const exiting = mode.startsWith('exit-');
     // The label can be visually hidden on phones (.shortLabel .label), leaving the icon.
@@ -132,6 +173,7 @@ export function setupFullscreenButton(btn, { video = null, getPlaybackState = ()
     update();
   });
   for (const event of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(event, update);
+  window.addEventListener('resize', update);
   if (video) {
     for (const event of ['loadedmetadata', 'emptied', 'webkitbeginfullscreen', 'webkitendfullscreen']) video.addEventListener(event, update);
     new MutationObserver(update).observe(video, { attributes: true, attributeFilter: ['hidden', 'style'] });

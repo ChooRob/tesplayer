@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fullscreenMode, goFullscreen, isTeslaBrowser, looksLikeCarBrowser, teslaOverride } from '../public/fullscreen.js';
+import { fullscreenMode, goFullscreen, isTeslaBrowser, looksLikeCarBrowser, teslaOverride, noteTeslaFullscreen, inTeslaFullscreen, TESLA_RETURN_MARK } from '../public/fullscreen.js';
+// The address the Tesla way comes back to, without the mark it adds (see noteTeslaFullscreen).
+const returnOf = (destination) => { const back = new URL(new URL(destination).searchParams.get('q')); back.searchParams.delete(TESLA_RETURN_MARK); return back.href; };
 const base = () => ({ documentElement: {}, fullscreenEnabled: false });
 test('ordinary browsers fullscreen the whole page and toggle exit', async () => {
   let calls = 0;
@@ -48,7 +50,7 @@ test('Tesla uses its dedicated path with absent or unusable fullscreen APIs', as
     let destination;
     await goFullscreen({ doc, tesla: true, url, navigate(value) { destination = value; } });
     assert.equal(new URL(destination).origin, 'https://www.youtube.com');
-    assert.equal(new URL(destination).searchParams.get('q'), url);
+    assert.equal(returnOf(destination), url);
   }
 });
 
@@ -61,7 +63,7 @@ test('Tesla always redirects even with working page or native video fullscreen A
     let destination;
     assert.equal(fullscreenMode(doc, video, true), 'tesla');
     await goFullscreen({ doc, video, tesla: true, url: 'https://example.test/player', navigate(url) { destination = url; } });
-    assert.equal(new URL(destination).searchParams.get('q'), 'https://example.test/player');
+    assert.equal(returnOf(destination), 'https://example.test/player');
   }
   assert.equal(requested, false);
 });
@@ -85,7 +87,7 @@ test('Tesla live streams rejoin live without adding VOD resume parameters', asyn
   const url = 'https://example.test/canvas2.html?live=1&streamId=123';
   await goFullscreen({ doc: base(), tesla: true, url,
     playback: { currentTime: 100, paused: false }, navigate(value) { destination = value; } });
-  assert.equal(new URL(destination).searchParams.get('q'), url);
+  assert.equal(returnOf(destination), url);
 });
 
 // What the car in the dev access log sends: Chrome on desktop Linux, no mention of Tesla.
@@ -169,4 +171,48 @@ test('?tesla=1 tells the player it is in a Tesla, is remembered, and ?tesla=0 fo
   const broken = { getItem() { throw new Error('no'); }, setItem() { throw new Error('no'); }, removeItem() { throw new Error('no'); } };
   assert.equal(teslaOverride('?tesla=1', broken), true);
   assert.equal(teslaOverride('', broken), null);
+});
+
+function memoryStorage() {
+  const map = new Map();
+  return { getItem: key => map.get(key) ?? null, setItem: (key, value) => { map.set(key, String(value)); }, removeItem: key => { map.delete(key); } };
+}
+
+test('the Tesla way marks its return with how tall the window was before', async () => {
+  let destination;
+  await goFullscreen({ doc: base(), tesla: true, url: 'https://example.test/canvas2?key=5', viewportHeight: () => 620, navigate(url) { destination = url; } });
+  assert.equal(new URL(new URL(destination).searchParams.get('q')).searchParams.get(TESLA_RETURN_MARK), '620');
+});
+
+test('back in the car\'s fullscreen mode, the button is not offered until the window is shorter again', () => {
+  const storage = memoryStorage();
+  const replaced = [];
+  const history = { state: null, replaceState: (_state, _title, url) => replaced.push(url) };
+  noteTeslaFullscreen({ location: { href: `https://example.test/canvas2?key=5&${TESLA_RETURN_MARK}=620` }, history, storage, height: 760 });
+  assert.deepEqual(replaced, ['https://example.test/canvas2?key=5'], 'the mark comes off the address');
+  assert.equal(inTeslaFullscreen({ storage, height: 760 }), true);
+  assert.equal(inTeslaFullscreen({ storage, height: 620 }), false, 'fullscreen left: the button is back');
+  assert.equal(inTeslaFullscreen({ storage: memoryStorage(), height: 760 }), false, 'nothing noted, nothing hidden');
+});
+
+test('a car not in Park comes back without fullscreen, and the button stays', () => {
+  const storage = memoryStorage();
+  const history = { state: null, replaceState() {} };
+  noteTeslaFullscreen({ location: { href: `https://example.test/browse?${TESLA_RETURN_MARK}=620` }, history, storage, height: 620 });
+  assert.equal(inTeslaFullscreen({ storage, height: 620 }), false);
+  noteTeslaFullscreen({ location: { href: 'https://example.test/browse' }, history, storage, height: 900 });
+  assert.equal(inTeslaFullscreen({ storage, height: 900 }), false, 'an unmarked page notes nothing');
+});
+
+test('on a car, fullscreen that the browser says yes to but that does not fill the screen uses the Tesla way', async () => {
+  for (const [after, redirected] of [[620, true], [760, false]]) {
+    const urls = [];
+    const doc = carDoc({ takes: 'yes' });
+    let exited = false;
+    doc.exitFullscreen = () => { exited = true; doc.fullscreenElement = null; return Promise.resolve(); };
+    let calls = 0;
+    await goFullscreen({ ...carOptions(doc, urls), viewportHeight: () => (calls++ ? after : 620) });
+    assert.equal(urls.length === 1, redirected, `window ${after}px after`);
+    assert.equal(exited, redirected, 'the empty fullscreen is left first');
+  }
 });
