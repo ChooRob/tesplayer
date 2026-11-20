@@ -5,6 +5,8 @@
 // the latter with backoff instead of failing the whole stream on a transient
 // race.
 
+import { isTimeout } from './media-server-wait.js';
+
 const RETRY_DELAYS_MS = [0, 250, 500, 1000];
 // A missing session must stay missing this long before it counts as gone.
 const EXPIRED_CONFIRM_MS = 2500;
@@ -68,7 +70,8 @@ async function fetchWithTimeout(url, init, timeoutMs) {
 // Fetches a Plex HLS segment, retrying a 404 (segment not encoded yet) until the budget runs out. The
 // session-health probe decides whether the session itself is gone, but only a session that stays gone is
 // believed: after a seek Plex restarts its transcoder, and for a moment the session is missing from its list
-// while it comes back. Returns { response, expired }.
+// while it comes back. Returns { response, expired, slow }: slow when Plex has not answered within the
+// budget (a cold drive or a transcoder still starting), which the proxy turns into a 503 the player retries.
 export async function fetchPlexSegment(url, { headers, probe, session, budgetMs = SEGMENT_BUDGET_MS, confirmExpiredMs = EXPIRED_CONFIRM_MS, retryDelaysMs = RETRY_DELAYS_MS } = {}) {
   const deadline = Date.now() + budgetMs;
   let expiredSince = null;
@@ -79,7 +82,12 @@ export async function fetchPlexSegment(url, { headers, probe, session, budgetMs 
     if (attempt > 0 && delay) await new Promise((r) => setTimeout(r, delay));
 
     const remaining = Math.max(1000, deadline - Date.now());
-    response = await fetchWithTimeout(url, { headers }, remaining);
+    try {
+      response = await fetchWithTimeout(url, { headers }, remaining);
+    } catch (err) {
+      if (isTimeout(err)) return { response: null, expired: false, slow: true };
+      throw err;
+    }
     if (response.status !== 404) return { response, expired: false };
 
     await response.body?.cancel().catch(() => {});

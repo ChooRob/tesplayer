@@ -9,6 +9,7 @@ import { installationId } from './private-storage.js';
 import { QUALITY_LEVELS, normalizeQuality, qualityTiers, plexProfileConstraints } from './public/engine/quality-tiers.js';
 import { directPlexOrigin, fetchAvatar, mediaProxyPath, safeError } from './security.js';
 import { plexSessionId, createPlexSessionProbe, fetchPlexSegment } from './plex-session.js';
+import { sendMediaServerSlow } from './media-server-wait.js';
 import { createPlexLibrary } from './plex-library.js';
 import { createPlexAuth } from './plex-auth.js';
 import { plexDeviceHeaders } from './plex-connection.js';
@@ -323,6 +324,7 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
       if (result.expired) {
         return res.status(410).json({ code: 'PLEX_SESSION_EXPIRED', error: 'Plex playback session expired' });
       }
+      if (result.slow) return sendMediaServerSlow(res);
 
       const upstream = result.response;
       const contentType = (upstream.headers.get('content-type') || '').toLowerCase();

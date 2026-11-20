@@ -664,6 +664,7 @@
       let directAttempt = false;
       let directCapablePromise = Promise.resolve(false);
       let vodLoading = true;
+      let waitingForServer = false;
       let playbackRegistered = false;
       function fallbackToProxy() {
         if (!directAttempt) return;
@@ -1233,6 +1234,14 @@
         video,
         canvas,
         quality: currentQuality,
+        // The media server is slow to answer while the stream starts, typically a
+        // drive spinning up; the player keeps asking (see media-retry.js).
+        onMediaWait: () => {
+          if (!vodLoading || isLive) return;
+          if (!waitingForServer) log('waiting for the media server…');
+          waitingForServer = true;
+          showBanner('Waking the media server…', { persist: true });
+        },
         onStateChange: (state, detail) => {
           log(`state: ${state}${detail.error ? ' — playback error' : ''}`);
           if (detail.error) {
@@ -2410,20 +2419,26 @@
         const readAheadSeconds = queueData ? MUSIC_READ_AHEAD_SECONDS : READ_AHEAD_SECONDS[currentQuality] || 0;
         const readAheadParallelism = queueData ? MUSIC_READ_AHEAD_PARALLELISM : undefined;
         const startTime = resumeSeconds;
+        // Say so rather than leave the spinner running when the stream never starts.
+        const failedToStart = (error) => {
+          showBanner('Playback could not start. Tap to try again.', { persist: true, onClick: () => location.reload() });
+          return error;
+        };
         try {
           await player.load(startUrl + (directAttempt ? '&direct=1' : ''), { direct: directAttempt, readAheadSeconds, readAheadParallelism, startTime });
         } catch (error) {
           if (await rejectBlockedPlayback(error)) return;
-          if (!directAttempt) throw error;
+          if (!directAttempt) throw failedToStart(error);
           directAttempt = false;
           showBanner('Direct connection unavailable — using server relay');
           try { await player.load(startUrl, { readAheadSeconds, readAheadParallelism, startTime }); }
           catch (fallbackError) {
             if (await rejectBlockedPlayback(fallbackError)) return;
-            throw fallbackError;
+            throw failedToStart(fallbackError);
           }
         }
         vodLoading = false;
+        if (waitingForServer) hideBanner();
         playbackRegistered = true;
         document.getElementById('activePlayback').textContent =
           `Now: ${selection.mode === 'canvas' ? 'Canvas' : 'Standard'} · ${directAttempt ? 'Direct from Plex' : 'Server relay'}`;

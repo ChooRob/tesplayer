@@ -14,6 +14,8 @@ const TOKEN = 'emby-token-never-seen-by-the-browser';
 const PLAY = 'c'.repeat(32);
 const BASE = 'http://emby.test:8096';
 const calls = [];
+// Media playlist requests that time out first, as when Emby waits on a drive spinning up.
+let coldDriveTimeouts = 0;
 
 // A tiny Emby: just enough of the API the source uses, recording what it was asked.
 async function fakeEmby(input, init = {}) {
@@ -51,6 +53,10 @@ async function fakeEmby(input, init = {}) {
   }
   if (url.pathname === '/videos/909/master.m3u8') {
     return new Response(`#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nmain.m3u8?DeviceId=x&PlaySessionId=${PLAY}\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
+  }
+  if (url.pathname === '/videos/909/main.m3u8' && coldDriveTimeouts > 0) {
+    coldDriveTimeouts -= 1;
+    throw new DOMException('The operation timed out.', 'TimeoutError');
   }
   if (url.pathname === '/videos/909/main.m3u8') {
     return new Response(`#EXTM3U\n#EXTINF:3.0,\nhls1/main/0.ts?PlaySessionId=${PLAY}\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
@@ -180,6 +186,10 @@ test('a stream asks for no subtitles, never exposes the token, and goes through 
   assert.equal(master.params.get('VideoBitrate'), '1000000');
 
   const variant = playlist.split('\n').find(line => line.startsWith('/proxy/'));
+  coldDriveTimeouts = 1;
+  const slow = await send(variant);
+  assert.equal(slow.status, 503, 'Emby not answering in time is retried, not failed');
+  assert.equal(slow.headers.get('retry-after'), '1');
   const media = await (await send(variant)).text();
   const segment = media.split('\n').find(line => line.startsWith('/proxy/'));
   assert.equal(segment.split('?')[0], '/proxy/videos/909/hls1/main/0.ts');

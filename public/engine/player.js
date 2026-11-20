@@ -6,6 +6,7 @@ import { decodedFrameCapacity, normalizeQuality } from './quality-tiers.js';
 import { AudioRingBuffer } from './audio-ring-buffer.js';
 import { PresentationClock, estimateAudioOutputLatencySeconds } from './presentation-clock.js';
 import { SegmentPrefetcher } from './segment-prefetch.js';
+import { createRetryingFetch } from './media-retry.js';
 
 // Buffer compressed media in the source; retain only a handful of decoded
 // frames so hardware decoder surfaces and browser memory stay bounded.
@@ -47,7 +48,7 @@ async function closeIterator(iterator) {
 }
 
 export class Player {
-  constructor({ canvas, quality = 'high', onStateChange = () => {}, onStats = () => {}, onTrackChange = () => {} }) {
+  constructor({ canvas, quality = 'high', onStateChange = () => {}, onStats = () => {}, onTrackChange = () => {}, onMediaWait = () => {} }) {
     if (!globalThis.crossOriginIsolated || typeof SharedArrayBuffer !== 'function') {
       throw new Error('Player requires COOP/COEP (crossOriginIsolated) and SharedArrayBuffer');
     }
@@ -63,6 +64,7 @@ export class Player {
     this.prepared = null;
     this.preparing = null;
     this.chained = null;
+    this.onMediaWait = onMediaWait;
 
     this.input = null;
     this.videoTrack = null;
@@ -150,9 +152,13 @@ export class Player {
     this.discardNext();
     this.disposePreviousInputs();
     const sourceOptions = { maxCacheSize: this.quality === 'ultra' ? 24 * 1024 * 1024 : 8 * 1024 * 1024 };
+    // Through the relay, a media server that is slow to answer is waited for (see media-retry.js).
+    const relayFetch = createRetryingFetch({ onWaiting: (detail) => this.onMediaWait(detail) });
     if (readAheadSeconds > 0 && !direct) {
-      this.prefetcher = new SegmentPrefetcher({ readAheadSeconds, parallelism: readAheadParallelism });
+      this.prefetcher = new SegmentPrefetcher({ readAheadSeconds, parallelism: readAheadParallelism, fetchFn: relayFetch });
       sourceOptions.fetchFn = this.prefetcher.fetch;
+    } else if (!direct) {
+      sourceOptions.fetchFn = relayFetch;
     }
     this.input = new Input({ formats: ALL_FORMATS, source: new UrlSource(url, direct ? {
       ...sourceOptions,

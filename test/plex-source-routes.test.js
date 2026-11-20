@@ -41,6 +41,8 @@ Object.assign(process.env, {
 const originalFetch = globalThis.fetch;
 const calls = [];
 let pinSequence = 500;
+// Requests for a stream's playlist that time out first, as when Plex waits on a drive spinning up.
+let coldDriveTimeouts = 0;
 globalThis.fetch = async (value, options = {}) => {
   const url = new URL(value);
   calls.push({ url, options });
@@ -81,6 +83,7 @@ globalThis.fetch = async (value, options = {}) => {
     return new Response(`#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nsession/${session}/base/index.m3u8\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
   }
   if (/^\/video\/:\/transcode\/universal\/session\/[^/]+\/base\/index\.m3u8$/.test(p)) {
+    if (coldDriveTimeouts > 0) { coldDriveTimeouts -= 1; throw new DOMException('The operation timed out.', 'TimeoutError'); }
     return new Response('#EXTM3U\n#EXTINF:8.0,\n00000.ts\n#EXT-X-ENDLIST\n', { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
   }
   if (/^\/video\/:\/transcode\/universal\/session\/[^/]+\/base\/00000\.ts$/.test(p)) {
@@ -180,6 +183,13 @@ test('browsing, playback, the media proxy and watch state go through the Plex so
   const decision = callsTo('/video/:/transcode/universal/decision').at(-1);
   assert.equal(decision.url.searchParams.get('path'), '/library/metadata/5');
   assert.equal(decision.options.headers['X-Plex-Token'], 'test-server-token', 'playback uses the profile token');
+
+  // Plex not answering in time is a 503 the player asks again after, not a failed stream.
+  coldDriveTimeouts = 1;
+  const slow = await request(variant, { cookie });
+  assert.equal(slow.status, 503);
+  assert.equal(slow.headers['retry-after'], '1');
+  assert.equal(slow.json.code, 'MEDIA_SERVER_SLOW');
 
   const media = await request(variant, { cookie });
   assert.equal(media.status, 200);
