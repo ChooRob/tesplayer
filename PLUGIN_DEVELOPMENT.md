@@ -130,7 +130,10 @@ group a person by, in the form `<type>:<something stable>`.
 **`library(req)`** returns these async methods. Items use Plex's field names, which
 the pages read:
 
-- `libraries()` → `[{ id, title, type: 'movie' | 'show' }]`
+- `libraries()` → `[{ id, title, type: 'movie' | 'show' | 'video' | 'music' }]`. A `video` library is plain video files
+  with little or no metadata (home videos, music videos, Plex's Other Videos): its items are films (`type: 'movie'`), and it
+  gets Play and Shuffle buttons, which queue every video in it. A `movie` library gets one "Play something" button that
+  does the same as Shuffle, for someone who cannot choose.
 - `libraryItems(libraryId, { sort })` → `{ total, items }`; `recentlyAdded(libraryId)`;
   `search(query)`; `continueWatching()`
 - `showSeasons(showId)`, `showEpisodes(showId)`, `seasonEpisodes(seasonId)`
@@ -141,8 +144,6 @@ the pages read:
 - An item has `ratingKey` (your ID, as a string), `type` (`movie`, `show`, `season`,
   `episode`), `title`, `thumbnail` (a `/api/library/thumb?...` URL), `durationMs`,
   `viewOffset` (resume point in ms), and for shows `leafCount` and `viewedLeafCount`.
-  Episodes also have `viewCount` (times watched, 0 when unwatched), which Play on a
-  show or season uses to start after the last watched episode.
 - Optional: `subtitleTracks(itemId)` and `subtitleText(itemId, trackId)`; see
   `subtitles.js` for the track format. Without them there are no captions.
 - To fail with something a viewer should read, throw an Error with a `userMessage`

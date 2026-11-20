@@ -249,7 +249,7 @@
     #detailMeta span { white-space: nowrap; }
     #detailMeta .badge { border: 1px solid #666; border-radius: 4px; padding: 2px 6px; font-size: 11px; }
     #detailGenres { margin-bottom: 10px; color: #999; font-size: 12px; }
-    /* Play and Shuffle for an artist, album, playlist, show or season. */
+    /* Play and Shuffle for an artist, album or playlist. */
     #detailActions { display: flex; gap: 10px; margin: 6px 0 14px; flex-wrap: wrap; }
     #detailActions[hidden] { display: none; }
     #detailActions button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 20px; border: 0; border-radius: 8px; background: #2c2c2c; color: #eee; font-size: 15px; font-weight: 600; cursor: pointer; }
@@ -260,6 +260,7 @@
     #libraryActions { display: flex; gap: 10px; flex-wrap: wrap; }
     #libraryActions[hidden] { display: none; }
     #libraryActions button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 10px 20px; border: 0; border-radius: 8px; background: #2c2c2c; color: #eee; font-size: 15px; font-weight: 600; cursor: pointer; }
+    #libraryActions button[hidden] { display: none; }
     #libraryActions button.primary { background: #e5a00d; color: #111; }
     #detailActions button:disabled { opacity: .5; cursor: default; }
     /* A long biography takes three lines until the viewer asks for the rest, so the albums sit near the top. */
@@ -370,7 +371,7 @@
     <div id="viewSwitch" role="tablist" aria-label="List by" hidden></div>
     <div id="libraryActions" hidden>
       <button type="button" id="libraryPlay" class="primary"><span data-icon="play"></span>Play</button>
-      <button type="button" id="libraryShuffle"><span data-icon="shuffle"></span>Shuffle</button>
+      <button type="button" id="libraryShuffle"><span data-icon="shuffle"></span><span id="libraryShuffleLabel">Shuffle</span></button>
     </div>
   </div>
   <!-- Under the Artists / Albums / Tracks switch, so it stays put while a list loads. -->
@@ -413,8 +414,7 @@
     import { readBrowseView, writeBrowseView } from "/browse-location.js";
     import { filterItems } from "/browse-filter.js";
     import { clearSavedMusic, MUSIC_SESSION_KEY } from "/saved-music.js";
-    import { createQueue, saveQueue, readQueue, MAX_QUEUE } from "/music-queue.js";
-    import { isResumable, onDeckIndex } from "/on-deck.js";
+    import { createQueue, saveQueue, readQueue, MAX_QUEUE, isResumable } from "/music-queue.js";
     import { gatherRadio } from "/music-radio.js";
     import { LETTERS, letterIndex, targetIndex, LETTER_BAR_MIN_ITEMS } from "/letter-index.js";
     import { MUSIC_MESSAGE, fromFrame, cleanState, keepsMusicPlaying, clock as clockOf } from "/music-host.js";
@@ -541,6 +541,9 @@
     const detailHeaderEl = document.getElementById('detailHeader');
 
     function hideDetailHeader() {
+      // Every screen that is not a library of films (a plugin's tab such as Live TV, a show, a search) has no Play bar.
+      libraryActionsEl.hidden = true;
+      gridControlsEl.hidden = viewSwitchEl.hidden;
       detailHeaderEl.style.display = 'none';
       pageHeaderEl.style.display = '';
       toolbarEl.style.display = '';
@@ -1476,25 +1479,21 @@
       }
     }
 
-    // Play and Shuffle above a movie library: its movies as listed (and filtered), from the top or shuffled.
+    // Above a library of films, its films as listed. A library of videos (home videos, music videos, Other Videos) has
+    // Play, from the top, and Shuffle. A library of movies is for choosing from, so for someone who cannot choose it has
+    // one button, "Play something", which shuffles them.
     function offerLibraryPlay(lib) {
       const movies = () => gridState.items.filter((item) => item.type === 'movie');
-      libraryActionsEl.hidden = !(lib.type === 'movie' && movies().length > 1);
+      const chooses = lib.type === 'movie';
+      libraryActionsEl.hidden = !((lib.type === 'video' || chooses) && movies().length > 1);
       gridControlsEl.hidden = viewSwitchEl.hidden && libraryActionsEl.hidden;
+      const shuffle = document.getElementById('libraryShuffle');
+      document.getElementById('libraryPlay').hidden = chooses;
       document.getElementById('libraryPlay').onclick = () => playQueue({ label: lib.title, items: movies(), video: true });
-      document.getElementById('libraryShuffle').onclick = () => playQueue({ label: lib.title, items: movies(), shuffle: true, video: true });
-    }
-
-    // Play and Shuffle for a show's or a season's episodes. Play starts where Plex's Play would (see on-deck.js)
-    // and goes on in order; Shuffle mixes them all.
-    function episodeActions(label, loadEpisodes) {
-      const run = async (shuffle) => {
-        try {
-          const episodes = (await loadEpisodes()).filter((item) => item.type === 'episode');
-          if (episodes.length) playQueue({ label, items: episodes, start: shuffle ? 0 : onDeckIndex(episodes), shuffle, video: true });
-        } catch (err) { showLoadError(err); }
-      };
-      return { play: () => run(false), shuffle: () => run(true) };
+      shuffle.onclick = () => playQueue({ label: lib.title, items: movies(), shuffle: true, video: true });
+      shuffle.classList.toggle('primary', chooses);
+      shuffle.title = chooses ? 'Plays films from this library, picked at random' : 'Play in random order';
+      document.getElementById('libraryShuffleLabel').textContent = chooses ? 'Play something' : 'Shuffle';
     }
 
     async function openShowSeasons(ratingKey, title) {
@@ -1538,9 +1537,7 @@
             // Radio: this artist's tracks mixed with tracks by artists like it, as Plex's artist radio does.
             radioTitle: `Plays ${showItem.title} and artists like it`,
             radio: () => startRadio(showItem, ratingKey),
-          // A whole show leaves out its specials, as Play Next does.
-          } : episodeActions(showItem.title, async () => (await fetchJson(`/api/library/show/${ratingKey}/episodes`))
-            .filter((item) => item.season !== 0));
+          } : null;
           renderDetailHeader(showItem, { onBack, actions });
         }
         // (If the show's own details failed to load there is no header, and no back control either: the library
@@ -1715,11 +1712,10 @@
         // An album (or playlist) of tracks can be played from its start, or shuffled.
         const tracks = episodes.filter((item) => item.type === 'track');
         if (tracks.length) currentQueueLabel = season.title;
-        const videos = episodes.filter((item) => item.type === 'episode');
         const actions = tracks.length ? {
           play: () => playQueue({ label: season.title, items: tracks }),
           shuffle: () => playQueue({ label: season.title, items: tracks, shuffle: true }),
-        } : videos.length ? episodeActions(season.title, async () => videos) : null;
+        } : null;
         if (showItem) {
           renderDetailHeader(showItem, { subtitle: season.title, poster: season.thumbnail, onBack, actions });
         }

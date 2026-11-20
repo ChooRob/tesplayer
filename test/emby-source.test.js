@@ -33,7 +33,7 @@ async function fakeEmby(input, init = {}) {
   if (url.pathname.startsWith('/Items/') && url.pathname.endsWith('/Images/Primary'))
     return authorized ? new Response('png', { headers: { 'Content-Type': 'image/png' } }) : new Response('', { status: 401 });
   if (!authorized && !url.pathname.startsWith('/videos/')) return new Response('', { status: 401 });
-  if (url.pathname === `/Users/${USER_ID}/Views`) return json({ Items: [{ Id: '3', Name: 'Movies', CollectionType: 'movies' }, { Id: '9', Name: 'Music', CollectionType: 'music' }] });
+  if (url.pathname === `/Users/${USER_ID}/Views`) return json({ Items: [{ Id: '3', Name: 'Movies', CollectionType: 'movies' }, { Id: '9', Name: 'Music', CollectionType: 'music' }, { Id: '5', Name: 'Home', CollectionType: 'homevideos' }, { Id: '6', Name: 'Clips', CollectionType: 'musicvideos' }] });
   if (url.pathname === `/Users/${USER_ID}/Items`) {
     return json({ TotalRecordCount: 1, Items: [{ Id: '909', Name: 'A Movie', Type: 'Movie', ProductionYear: 2009, RunTimeTicks: 36_000_000_000, ImageTags: { Primary: 'x' }, UserData: { PlaybackPositionTicks: 600_000_000 } }] });
   }
@@ -139,7 +139,7 @@ test('a wrong password is refused and a right one signs in without exposing the 
 });
 
 test('libraries and items are shaped like the other sources', async () => {
-  assert.deepEqual(await (await send('/lib/libraries')).json(), [{ id: '3', title: 'Movies', type: 'movie' }]);
+  assert.deepEqual(await (await send('/lib/libraries')).json(), [{ id: '3', title: 'Movies', type: 'movie' }, { id: '5', title: 'Home', type: 'video' }, { id: '6', title: 'Clips', type: 'video' }]);
   const { total, items } = await (await send('/lib/items/3')).json();
   assert.equal(total, 1);
   assert.deepEqual(items[0], {
@@ -151,6 +151,8 @@ test('libraries and items are shaped like the other sources', async () => {
   assert.equal(details.resolution, '3840x2160');
   const asked = calls.findLast(call => call.path === `/Users/${USER_ID}/Items`);
   assert.equal(asked.headers['X-Emby-Token'], TOKEN);
+  const listed = calls.findLast(call => call.path === `/Users/${USER_ID}/Items` && call.params.get('IncludeItemTypes')?.includes('Series'));
+  assert.equal(listed.params.get('IncludeItemTypes'), 'Movie,Series,Video,MusicVideo', 'a home video or a music video is listed too');
 });
 
 test('thumbnails are fetched for valid image requests only', async () => {

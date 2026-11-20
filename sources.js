@@ -20,6 +20,10 @@
 //   accounts                       -- search(query), describe(key) for admin
 //                                     pages; see accounts.js
 //
+// A library's type is 'movie', 'show', 'music', or 'video' (plain video files with little or no metadata: home videos,
+// music videos, Plex's Other Videos). A video library lists films, and is offered Play and Shuffle over all of them (a movie library, one
+// "Play something" button that shuffles them).
+//
 // Music uses the same calls, so the browse pages need nothing source-specific: a library of
 // type 'music' lists items of type 'artist'; showSeasons(artistId) returns the artist's albums
 // (type 'album', with showRatingKey and showTitle naming the artist); seasonEpisodes(albumId)

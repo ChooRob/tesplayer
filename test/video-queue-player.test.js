@@ -39,7 +39,8 @@ function player(search, storage) {
   const context = {
     URL, URLSearchParams, Promise, setTimeout, clearTimeout, console,
     location: { search, origin: 'https://player.example', replace: url => replaced.push(new URL(url)) },
-    document: { getElementById: element, createElement: () => element(`new-${Math.random()}`) },
+    document: { getElementById: element, createElement: () => element(`new-${Math.random()}`), addEventListener() {} },
+    showOverlay() {},
     sessionStorage: storage, localStorage: memoryStorage(),
     urlParams, itemKey: urlParams.get('key'), isLive: false, embedded: false,
     player: { duration: 200, clock: { currentTime: 100 }, seek() {} },
