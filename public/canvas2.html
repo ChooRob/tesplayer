@@ -8,6 +8,8 @@
   <style>
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    /* Music is not a picture on black: it is the browse page's own dark, so moving to a track does not flash. */
+    html.music, html.music body { background: #111; }
     canvas, #standardVideo {
       display: block;
       width: 100vw;
@@ -57,6 +59,71 @@
     .settingsActions button { min-height: 44px; padding: 10px 18px; border: 0; border-radius: 8px; color: white; background: #41434c; font-size: 15px; cursor: pointer; }
     #applyPlayback { background: #0878e6; }
     #dimLayer { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; }
+    /* Music has no picture, so the screen is a music player: the cover and what is playing on the
+       left, the album's tracks on the right with the one playing lit and the ones before it dimmed.
+       It sits between the top bar and the controls, above the overlay so the list can be tapped. */
+    #musicCover { position: fixed; z-index: 5; left: 0; right: 0; top: 64px; bottom: 124px; display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); grid-template-rows: minmax(0, 1fr); gap: 3vw; align-items: stretch; padding: 12px 4vw; pointer-events: none; }
+    #musicCover[hidden] { display: none; }
+    /* min-height: 0 down the chain is what lets the lyrics and the queue scroll inside the space they have,
+       instead of growing past it and running under the controls. */
+    #musicNow { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; min-width: 0; min-height: 0; }
+    #musicCoverImg { width: min(46vh, 34vw); height: min(46vh, 34vw); object-fit: cover; border-radius: 10px; background: #222; box-shadow: 0 12px 48px rgba(0, 0, 0, .6); }
+    #musicCoverText { text-align: center; max-width: 100%; }
+    #musicCoverTitle { color: #f4f4f6; font: 700 clamp(20px, 3.2vh, 32px) -apple-system, system-ui, sans-serif; overflow-wrap: anywhere; }
+    #musicCoverSub a { color: inherit; text-decoration: none; pointer-events: auto; border-bottom: 1px solid transparent; }
+    #musicCoverSub a:hover, #musicCoverSub a:focus-visible { color: #fff; border-bottom-color: currentColor; outline: none; }
+    #musicCoverSub { margin-top: 6px; color: #aaa; font: 500 clamp(15px, 2.2vh, 21px) -apple-system, system-ui, sans-serif; overflow-wrap: anywhere; }
+    #musicQueue { display: flex; flex-direction: column; min-height: 0; background: rgba(255, 255, 255, .06); border-radius: 14px; overflow: hidden; pointer-events: auto; }
+    #musicQueueHead { padding: 16px 22px 10px; border-bottom: 1px solid rgba(255, 255, 255, .08); }
+    #musicQueueLabel { color: #8a8d98; font: 600 12px -apple-system, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; }
+    #musicQueueAlbum { margin-top: 3px; color: #e8e8ea; font: 700 clamp(16px, 2.4vh, 22px) -apple-system, system-ui, sans-serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #musicQueueList { list-style: none; margin: 0; padding: 6px; overflow-y: auto; flex: 1; scrollbar-width: thin; }
+    .q button { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; min-height: 54px; padding: 8px 14px; border: 0; border-left: 4px solid transparent; border-radius: 8px; background: transparent; color: #e8e8ea; font: 500 clamp(15px, 2.3vh, 20px) -apple-system, system-ui, sans-serif; text-align: left; cursor: pointer; }
+    .q button:hover, .q button:focus-visible { background: rgba(255, 255, 255, .08); outline: none; }
+    .q .qNum { color: #8a8d98; text-align: center; font-variant-numeric: tabular-nums; }
+    .q .qName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .q .qArtist { display: block; color: #8a8d98; font-size: .78em; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+    .q .qLen { color: #8a8d98; font-variant-numeric: tabular-nums; }
+    .q.played button { opacity: .5; }
+    .q.current button { background: rgba(8, 120, 230, .3); border-left-color: #4aa3ff; font-weight: 700; color: #fff; opacity: 1; }
+    .q.current .qNum { color: #4aa3ff; }
+    .q.current .qNum svg { width: 20px; height: 20px; }
+    .q.current .qArtist, .q.current .qLen { color: #b9d9ff; }
+    #musicQueueEmpty { padding: 24px; color: #8a8d98; text-align: center; }
+    /* Lyrics take the cover's place: the cover shrinks to a small header above them and the tracks stay where they are. */
+    #musicNowHead { display: flex; flex-direction: column; align-items: center; gap: 20px; max-width: 100%; }
+    #musicLyrics { display: none; flex: 1; align-self: stretch; flex-direction: column; min-height: 0; background: rgba(255, 255, 255, .06); border-radius: 14px; overflow: hidden; pointer-events: auto; }
+    #musicCover.showLyrics #musicNow { justify-content: flex-start; gap: 12px; }
+    #musicCover.showLyrics #musicNowHead { flex-direction: row; align-self: stretch; gap: 14px; }
+    #musicCover.showLyrics #musicCoverImg { width: 88px; height: 88px; border-radius: 8px; flex: none; box-shadow: 0 4px 16px rgba(0, 0, 0, .5); }
+    #musicCover.showLyrics #musicCoverText { text-align: left; min-width: 0; }
+    #musicCover.showLyrics #musicLyrics { display: flex; }
+    #musicLyricsHead { display: flex; align-items: center; gap: 12px; padding: 14px 22px 10px; border-bottom: 1px solid rgba(255, 255, 255, .08); }
+    #musicLyricsTitle { flex: 1; min-width: 0; }
+    #musicLyricsLabel { color: #8a8d98; font: 600 12px -apple-system, system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; }
+    #musicLyricsSource { margin-top: 3px; font: 600 clamp(14px, 2vh, 18px) -apple-system, system-ui, sans-serif; color: #ddd; }
+    #musicLyricsVersion { display: flex; align-items: center; gap: 6px; color: #aaa; font: 500 13px -apple-system, system-ui, sans-serif; }
+    #musicLyricsVersion button { background: rgba(255, 255, 255, .12); color: #fff; border: 0; border-radius: 8px; min-width: 40px; min-height: 40px; font-size: 18px; cursor: pointer; }
+    #musicLyricsVersion[hidden] { display: none; }
+    #lyricLines { list-style: none; margin: 0; padding: 14px 22px 40px; overflow-y: auto; flex: 1; scrollbar-width: thin; }
+    #lyricLines li { padding: 5px 0; color: #e8e8ea; font: 500 clamp(18px, 3vh, 28px)/1.35 -apple-system, system-ui, sans-serif; overflow-wrap: anywhere; }
+    #lyricLines li.gap { height: .8em; padding: 0; }
+    /* The current line changes by colour alone: bolding or scaling it would lay the text out again every few seconds,
+       which an older car's processor shows as a hitch. */
+    #lyricLines.timed li { color: #8a8d98; transition: color .25s; cursor: pointer; }
+    #lyricLines.timed li.past { color: #6b6e78; }
+    #lyricLines.timed li.active { color: #fff; }
+    #lyricsMessage { padding: 28px 22px; color: #8a8d98; text-align: center; font: 500 16px -apple-system, system-ui, sans-serif; }
+    #lyricsBtn[hidden], #shuffleBtn[hidden], #repeatBtn[hidden] { display: none; }
+    #shuffleBtn[aria-pressed="true"], #repeatBtn[aria-pressed="true"] { background: #0878e6; }
+    #lyricsBtn[aria-pressed="true"] { background: #0878e6; }
+    #prevTrackBtn[hidden], #nextTrackBtn[hidden] { display: none; }
+    /* A tall or narrow screen puts the list under the cover. */
+    @media (max-aspect-ratio: 1/1), (max-width: 800px) {
+      #musicCover { grid-template-columns: 1fr; grid-template-rows: minmax(0, auto) minmax(0, 1fr); gap: 14px; padding: 8px 14px; }
+      #musicCoverImg { width: min(30vh, 60vw); height: min(30vh, 60vw); }
+      #musicNow { gap: 10px; }
+    }
     #controls { position: relative; }
     /* The picture's size and position are set from the player bar's picture panel. */
     canvas, #standardVideo, #stillImage {
@@ -159,6 +226,11 @@
       animation: playSpin 0.8s linear infinite;
     }
     @keyframes playSpin { to { transform: rotate(360deg); } }
+    /* A skip button turns to a spinner from the tap until the next track is under way, so a slow moment is not tapped twice. */
+    #controls button.skipping { position: relative; pointer-events: none; }
+    #controls button.skipping > * { visibility: hidden; }
+    #controls button.skipping::after { content: ''; position: absolute; left: calc(50% - 11px); top: calc(50% - 11px); width: 22px; height: 22px; box-sizing: border-box; border: 3px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: playSpin 0.8s linear infinite; }
+    @media (prefers-reduced-motion: reduce) { #controls button.skipping::after { animation-duration: 2s; } }
     @media (prefers-reduced-motion: reduce) { #playPauseBtn .spinner { animation-duration: 2s; } }
 
     #seekBar { flex: 1; accent-color: #0a84ff; height: 24px; cursor: pointer; }
@@ -187,7 +259,7 @@
       visibility: hidden;
       left: 50%;
       transform: translateX(-50%);
-      background: rgba(10,132,255,0.92);
+      background: #0a84ff;
       color: #fff;
       font-family: -apple-system, system-ui, sans-serif;
       font-size: 14px;
@@ -197,7 +269,10 @@
       opacity: 0;
       pointer-events: none;
       transition: opacity 0.4s ease;
-      z-index: 2;
+      /* Above the music screen (z-index 5), which fills the space below the top bar: a banner behind it showed the
+         queue's heading through it. Solid, so nothing shows through. */
+      z-index: 6;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
     }
     #resumeBanner.visible { opacity: 1; visibility: visible; }
     #resumeBanner.visible.clickable { pointer-events: auto; cursor: pointer; }
@@ -300,6 +375,29 @@
   <canvas id="canvas" hidden></canvas>
   <video crossorigin="anonymous" id="standardVideo" playsinline preload="auto" hidden></video>
   <img id="stillImage" alt="Placeholder image" />
+  <div id="musicCover" hidden>
+    <div id="musicNow">
+      <div id="musicNowHead">
+        <img id="musicCoverImg" alt="">
+        <div id="musicCoverText"><div id="musicCoverTitle"></div><div id="musicCoverSub"></div></div>
+      </div>
+      <section id="musicLyrics" aria-label="Lyrics">
+        <div id="musicLyricsHead">
+          <div id="musicLyricsTitle"><div id="musicLyricsLabel">Lyrics</div><div id="musicLyricsSource"></div></div>
+          <div id="musicLyricsVersion" hidden>
+            <button type="button" id="lyricsPrev" aria-label="Previous lyrics">‹</button>
+            <span id="lyricsCount"></span>
+            <button type="button" id="lyricsNext" aria-label="Next lyrics">›</button>
+          </div>
+        </div>
+        <ol id="lyricLines"></ol>
+      </section>
+    </div>
+    <section id="musicQueue" aria-label="Up next">
+      <div id="musicQueueHead"><div id="musicQueueLabel">Playing from</div><div id="musicQueueAlbum"></div></div>
+      <ol id="musicQueueList"></ol>
+    </section>
+  </div>
   <div id="dimLayer" aria-hidden="true"></div>
   <div id="resumeBanner"></div>
   <button id="audioUnlockBtn" style="display:none"><span data-icon="volume"></span> Tap to enable sound</button>
@@ -318,9 +416,14 @@
       </div>
     </div>
     <div id="controls">
+      <button id="prevTrackBtn" hidden title="Previous track" aria-label="Previous track"><span data-icon="skip-prev"></span></button>
       <button id="back30" title="Back 30s" aria-label="Back 30 seconds"><span data-icon="back" data-label="30"></span></button>
       <button id="playPauseBtn" title="Play/Pause" aria-busy="true"><span class="spinner" role="status" aria-label="Loading"></span></button>
       <button id="fwd30" title="Forward 30s" aria-label="Forward 30 seconds"><span data-icon="forward" data-label="30"></span></button>
+      <button id="nextTrackBtn" hidden title="Next track" aria-label="Next track"><span data-icon="skip-next"></span></button>
+      <button id="shuffleBtn" hidden title="Shuffle" aria-label="Shuffle" aria-pressed="false"><span data-icon="shuffle"></span></button>
+      <button id="repeatBtn" hidden title="Repeat: off" aria-label="Repeat: off" aria-pressed="false"><span data-icon="repeat"></span></button>
+      <button id="lyricsBtn" hidden title="Lyrics" aria-label="Lyrics" aria-pressed="false"><span data-icon="lyrics"></span></button>
       <input id="seekBar" type="range" min="0" max="0" value="0" step="1" />
       <span id="timeLabel">00:00 / 00:00</span>
       <div id="dimPanel" role="group" aria-label="Adjustments" hidden>
@@ -394,6 +497,67 @@
     <p class="note"><a href="/licenses" target="_blank" rel="noopener" style="color:#8dc9ff">Software licenses</a></p>
   </dialog>
 
+  <script>
+    // Music: draw the player's screen now, from the queue the browse page (or the last track) saved,
+    // before anything has loaded, so choosing a track changes what is on screen instead of blanking it:
+    // the cover, the title, the album's tracks with this one lit, and the controls are all there at once.
+    // (The module below redraws the same things from the real details a moment later.)
+    (() => {
+      try {
+        const params = new URLSearchParams(location.search);
+        const id = params.get('queue');
+        const saved = id && JSON.parse(sessionStorage.getItem('freeStuffCrazyPlayer.queue') || 'null');
+        if (!saved || saved.id !== id || !Array.isArray(saved.items)) return;
+        const key = params.get('key');
+        const at = saved.items[saved.index]?.ratingKey === key ? saved.index : saved.items.findIndex((track) => track.ratingKey === key);
+        const track = saved.items[at];
+        if (!track) return;
+        document.documentElement.classList.add('music');
+        const $ = (name) => document.getElementById(name);
+        const sub = [track.artist, track.album].filter(Boolean).join(' · ');
+        $('musicCoverImg').src = track.thumbnail || '';
+        $('musicCoverTitle').textContent = track.title;
+        $('musicCoverSub').textContent = sub;
+        $('titleDisplay').textContent = track.artist ? `${track.artist} — ${track.title}` : track.title;
+        $('musicQueueAlbum').textContent = saved.label || track.album || '';
+        $('musicQueueLabel').textContent = `${saved.shuffled ? 'Shuffled' : 'Playing from'} · ${saved.items.length} tracks`;
+        const clock = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
+        const from = Math.max(0, at - 20);
+        const rows = saved.items.slice(from, at + 60).map((item, offset) => {
+          const index = from + offset;
+          const li = document.createElement('li');
+          li.className = 'q' + (index === at ? ' current' : index < at ? ' played' : '');
+          const button = document.createElement('button');
+          button.type = 'button';
+          const number = document.createElement('span');
+          number.className = 'qNum';
+          number.textContent = index === at ? '▶' : String(item.episode ?? index + 1);
+          const name = document.createElement('span');
+          name.className = 'qName';
+          name.textContent = item.title;
+          const by = [item.artist, item.album].filter(Boolean).join(' — ');
+          if (by) {
+            const artist = document.createElement('span');
+            artist.className = 'qArtist';
+            artist.textContent = by;
+            name.append(artist);
+          }
+          const length = document.createElement('span');
+          length.className = 'qLen';
+          length.textContent = item.durationMs ? clock(item.durationMs) : '';
+          button.append(number, name, length);
+          li.append(button);
+          return li;
+        });
+        $('musicQueueList').replaceChildren(...rows);
+        $('musicCover').hidden = false;
+        for (const name of ['back30', 'fwd30', 'watchedControls']) $(name).style.display = 'none';
+        for (const name of ['prevTrackBtn', 'nextTrackBtn', 'shuffleBtn', 'repeatBtn']) $(name).hidden = false;
+        $('musicCover').style.bottom = `${$('controls').offsetHeight + 8}px`;
+        $('musicQueueList').querySelector('.current')?.scrollIntoView({ block: 'center' });
+      } catch { /* the page then draws itself as usual */ }
+    })();
+  </script>
   <script type="module">
     import { Player } from '/engine/player.js';
     import { StandardPlayer } from '/engine/standard-player.js';
@@ -404,14 +568,18 @@
     import { setupFullscreenButton } from '/fullscreen.js';
     import { parseVtt, pickTrack, preferenceFor, readPreference, writePreference, createCaptionLayer } from '/captions.js';
     import { hydrateIcons, iconEl, iconSvg } from '/icons.js';
+    import { readQueue, saveQueue, createQueue, positionOf, withIndex, visibleWindow, shuffleQueue, unshuffleQueue, nextPosition, nextRepeat, rollRadio } from '/music-queue.js';
+    import { gatherRadio, RADIO_SIZE, RADIO_KEEP_PLAYED } from '/music-radio.js';
+    import { activeLine } from '/lyrics-view.js';
+    import { MUSIC_MESSAGE, fromParent, cleanCommand } from '/music-host.js';
     import { CENTERED, normalizePicture, readPicture, savePicture } from '/picture-layout.js';
-    import { normalizeVolume, readVolume, saveVolume } from '/volume-level.js';
+    import { normalizeVolume, readVolume, saveVolume, VOLUME_KEY, MUSIC_VOLUME_KEY } from '/volume-level.js';
     import { waitForServer } from '/engine/server-wait.js';
     hydrateIcons();
     import { createQuotaGuard } from '/engine/quota-guard.js';
     import { createPlaybackBanner } from '/playback-banner.js';
     import { createNextCountdown } from '/engine/next-countdown.js';
-    import { browseUrlFrom, carryBrowseView } from '/browse-location.js';
+    import { browseUrlFrom, carryBrowseView, browseUrlFor, idFromKey, readBrowseView } from '/browse-location.js';
     import { createMediaSession } from '/media-session.js';
 
     fetch('/api/plugin/frontend').then(res => res.ok ? res.json() : null).then(async assets => {
@@ -452,6 +620,12 @@
     const FADE_DELAY_MS = 5000;
     let fadeTimer = null;
     let overlayPinned = false; // kept visible while paused/buffering
+    // Music has no picture to see, so its controls (and the title bar) never fade away. A page with a queue in
+    // its address is music from the first moment; any other track says so once its details arrive.
+    let keepControlsUp = new URLSearchParams(location.search).has('queue');
+    // The browse page can hold this player in a frame, so that music carries on while it browses: then going
+    // "back to Browse" only shrinks this screen to the bar at the bottom of that page.
+    const embedded = window.parent !== window && new URLSearchParams(location.search).get('embedded') === '1';
 
     function showOverlay() {
       overlay.classList.add('visible');
@@ -460,7 +634,7 @@
     }
     function scheduleFade() {
       clearTimeout(fadeTimer);
-      if (overlayPinned || document.getElementById('playbackSettings').open || !document.getElementById('dimPanel').hidden || !document.getElementById('ccPanel').hidden) return;
+      if (overlayPinned || keepControlsUp || document.getElementById('playbackSettings').open || !document.getElementById('dimPanel').hidden || !document.getElementById('ccPanel').hidden) return;
       fadeTimer = setTimeout(() => {
         overlay.style.opacity = '0';
         overlay.classList.remove('visible');
@@ -478,9 +652,13 @@
       let storage;
       try { storage = localStorage; } catch {}
       const isLive = urlParams.get('live') === '1';
+      // Lyrics of the track playing (music): the sets it has, the one shown, its lines, and the line lit now.
+      const lyricState = { open: false, sets: [], index: 0, data: null, active: -1, els: [], loadedFor: null, userScrolledAt: 0 };
       // randomUUID exists only on secure pages; getRandomValues works everywhere.
-      const playbackId = crypto.randomUUID?.()
+      const newPlaybackId = () => crypto.randomUUID?.()
         ?? Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+      // Both change when gapless music moves on to the next track without reloading the page.
+      let playbackId = newPlaybackId();
       let reportPlaybackState = () => {};
       let quotaRemainingSeconds = null;
       let directAttempt = false;
@@ -503,7 +681,55 @@
       // is also how a stalled Plex transcode session gets restarted.
       // Reloading the page while the server restarts would land on the browser's
       // "site can't be reached" page, so wait until the server answers first.
+      // One reload at a time: two failures reported together must not start two streams, the second of which
+      // replaces the first and gets the first one's page told its stream is gone.
+      let reloadingPlayback = false;
       async function reloadPlayback(quality, { recovery = false } = {}) {
+        if (reloadingPlayback) return;
+        reloadingPlayback = true;
+        try {
+          // Music is put back without leaving the page, so the queue, the screen and the sound's place stay as they are.
+          if (recovery && await recoverMusicInPlace()) return;
+          await reloadPlaybackOnce(quality, { recovery });
+        } finally { reloadingPlayback = false; }
+      }
+      // A music stream that failed (the media server dropped its transcode session, a stall) is started again
+      // where it was, in this page, in the same playing or paused state. A second failure soon after is not
+      // handled quietly again: the page is reloaded as before and, if that fails too, the viewer is told.
+      const QUIET_RECOVERY_GAP_MS = 60000;
+      let lastQuietRecoveryAt = -Infinity;
+      async function recoverMusicInPlace() {
+        if (!isMusic || isLive || !queueData || !itemKey || skipping || movingOn || directAttempt || leaving
+          || selection.mode !== 'canvas' || typeof player?.load !== 'function') return false;
+        if (performance.now() - lastQuietRecoveryAt < QUIET_RECOVERY_GAP_MS) return false;
+        lastQuietRecoveryAt = performance.now();
+        skipping = true;
+        setHeartbeatsPaused(true);
+        const wanted = player.wantsPlayback || player.state === 'error' || player.state === 'buffering';
+        const at = Math.max(0, player.clock.currentTime || 0);
+        try {
+          // The server may be restarting; if it is not answering yet, the full reload below knows how to wait.
+          if (await waitForServer({ cancelled: () => leaving, timeoutMs: 15000 }) !== 'up') return false;
+          discardNextPlan();
+          const id = newPlaybackId();
+          const params = new URLSearchParams({ quality: currentQuality, playbackId: id, key: itemKey });
+          await player.load(`/api/start?${params}`, { readAheadSeconds: MUSIC_READ_AHEAD_SECONDS, readAheadParallelism: MUSIC_READ_AHEAD_PARALLELISM, startTime: at });
+          if (Math.abs(player.clock.currentTime - at) > 0.5) await player.seek(at);
+          playbackId = id;
+          seekBar.max = String(Math.floor(player.duration));
+          hideBanner();
+          downgrading = false;
+          lastProgressAt = performance.now();
+          if (wanted) await player.play();
+          return true;
+        } catch {
+          return false;
+        } finally {
+          skipping = false;
+          setHeartbeatsPaused(false);
+        }
+      }
+      async function reloadPlaybackOnce(quality, { recovery = false } = {}) {
         const target = new URL(location.href);
         target.searchParams.set('quality', quality);
         // When it happened, so only a failure soon after this reload counts
@@ -559,6 +785,11 @@
       }
 
       const READ_AHEAD_SECONDS = { low: 60, medium: 30, high: 0 };
+      const MUSIC_READ_AHEAD_SECONDS = 180;
+      // Music segments are about a second long, so on a slow link each request is mostly waiting. Plex makes them
+      // one after another as it transcodes, so asking for many at once only queues them behind it: with six at a
+      // time they timed out together in bursts, with two they do not.
+      const MUSIC_READ_AHEAD_PARALLELISM = 2;
 
       // A tier in the address wins (recovery and quality-change reloads), then the
       // viewer's own setting. Only Auto measures the connection at the start.
@@ -680,9 +911,15 @@
       const returnUrl = browseUrlFrom(location.search);
       const backLinkEl = document.getElementById('backLink');
       backLinkEl.href = returnUrl;
+      // Leaving the player: to the browse page, or, when held by it in a frame, just shrinking back to its bar
+      // (the browse page cannot be shown inside the frame).
+      function leavePlayer() {
+        if (embedded) { window.parent.postMessage({ type: MUSIC_MESSAGE, event: 'minimize' }, location.origin); return; }
+        location.replace(returnUrl);
+      }
       backLinkEl.addEventListener('click', (ev) => {
         ev.preventDefault();
-        location.replace(returnUrl);
+        leavePlayer();
       });
       let player;
       const stillImage = document.getElementById('stillImage');
@@ -777,7 +1014,9 @@
       const maxVolume = selection.mode === 'standard' ? 1 : 4;
       const volumeInput = document.getElementById('volumeLevel');
       const volumeValue = document.getElementById('volumeValue');
-      let volume = readVolume(storage, maxVolume);
+      // Music (a play queue) keeps its own volume, so a film's 400% boost does not distort it.
+      const volumeKey = new URLSearchParams(location.search).has('queue') ? MUSIC_VOLUME_KEY : VOLUME_KEY;
+      let volume = readVolume(storage, maxVolume, volumeKey);
       volumeInput.max = String(maxVolume * 100);
       function showVolume() {
         volumeInput.value = String(Math.round(volume * 100));
@@ -787,7 +1026,7 @@
       volumeInput.addEventListener('input', () => {
         volume = normalizeVolume(Number(volumeInput.value) / 100, maxVolume);
         showVolume();
-        saveVolume(storage, volume);
+        saveVolume(storage, volume, volumeKey);
       });
       showVolume();
 
@@ -1002,6 +1241,7 @@
               detail.error.name, detail.error.message);
           }
           renderPlayPause(state);
+          broadcastMusic(true);
           if (state === 'playing') clearStoppedBanner();
           mediaControls?.update(state, { position: player?.clock?.currentTime, duration: player?.duration });
           setPinned(state !== 'playing');
@@ -1017,10 +1257,14 @@
           }
           if (detail.audioResumeBlocked) showAudioUnlockPrompt();
         },
+        onTrackChange: () => beginNextTrack(),
         onStats: (stats) => {
           window.__lastStats = stats;
+          keepNextTrackReady(stats);
           if (selection.mode === 'canvas') lastCanvasStats = stats;
           watchPlaybackHealth(stats);
+          broadcastMusic();
+          updateLyrics(stats.mediaTime);
           mediaControls?.update(player.state, { position: stats.mediaTime, duration: player.duration });
           if (isLive) return;
           updateNextButton();
@@ -1049,10 +1293,14 @@
           pause: () => { player.pause(); if (!isLive) reportProgress('paused'); },
           seekBy: (seconds) => player.seek(player.clock.currentTime + seconds),
           seekTo: (seconds) => player.seek(seconds),
+          // Next and Previous mean tracks while music plays (see media-session.js).
+          // Through the on-screen buttons, so a press on the wheel shows the same spinner (and is ignored while one is working).
+          nextTrack: () => { if (!isMusic) return false; nextTrackBtn.click(); return true; },
+          previousTrack: () => { if (!isMusic) return false; prevTrackBtn.click(); return true; },
         },
       });
 
-      const itemKey = isLive ? null : urlParams.get('key');
+      let itemKey = isLive ? null : urlParams.get('key');
       const resumeSeconds = isLive ? 0 : Number(urlParams.get('resume')) || 0;
 
       // ---- Captions ----
@@ -1176,6 +1424,544 @@
       const cancelNextBtn = document.getElementById('cancelNextBtn');
       const playNextLabel = playNextBtn.firstElementChild;
       let declinedNext = false;
+      // A track: nothing to look at but the cover, and the next track follows at once, without a countdown.
+      let isMusic = false;
+      // The album it is on, in order: what is coming next, and which one is playing.
+      let queue = [];
+      let queueIndex = -1;
+      // The queue the browse page made when Play was pressed (an artist, album or playlist), if the
+      // address names one; otherwise the album is read below.
+      let queueData = null;
+      try { const id = urlParams.get('queue'); if (id) queueData = readQueue(sessionStorage, id); } catch { /* none */ }
+      function goToQueueIndex(index) {
+        const track = queue[index];
+        if (!track) return;
+        if (queueData) saveQueue(sessionStorage, withIndex(queueData, index));
+        const reload = () => goToItem(track.ratingKey, { queue: queueData?.id });
+        if (!queueData) { reload(); return; }
+        // Music moves on inside the page; if that cannot be done, the page is loaded afresh as before.
+        void skipToTrack(index).then((moved) => { if (!moved && !skipping) reload(); });
+      }
+      // On from this track: the next, round to the first if the queue repeats, or the same track again
+      // when one track repeats and it has finished by itself. At the end of a queue that does not repeat, stop.
+      function goNext({ auto }) {
+        if (!queueData) { if (queue[queueIndex + 1]) goToQueueIndex(queueIndex + 1); return; }
+        const to = nextPosition(withIndex(queueData, queueIndex), { auto });
+        if (to !== null) { goToQueueIndex(to); return; }
+        // A radio does not end: at the end of what it had, it gets more and carries on.
+        if (queueData.radio) extendRadio().then((added) => { if (added) goNext({ auto }); });
+      }
+
+      // A radio keeps going as a window that rolls along: it holds RADIO_SIZE tracks, the last RADIO_KEEP_PLAYED played
+      // ones behind the current track, and each time the track changes the older played ones go from the front and
+      // new ones from `radioPool` (tracks by the artist and artists like it, fetched but not queued) come on the end.
+      let radioPool = [];
+      let radioPoolRepeats = false; // a small library has run out of new tracks, so the pool may hold ones queued before
+      let radioExtending = null;
+      function rollRadioWindow({ refill = true } = {}) {
+        if (!queueData?.radio) return;
+        const current = withIndex(queueData, queueIndex);
+        const next = rollRadio(current, radioPool, { size: RADIO_SIZE, keepPlayed: RADIO_KEEP_PLAYED, allowRepeats: radioPoolRepeats });
+        if (next !== current) {
+          // Every position moves down by what left the front, including the track opened ahead.
+          const dropped = current.index - next.index;
+          if (nextPlan) nextPlan.pos -= dropped;
+          const queued = new Set(next.items.map((track) => String(track.ratingKey)));
+          radioPool = radioPool.filter((track) => !queued.has(String(track.ratingKey)));
+          changeQueue(next);
+        }
+        if (refill && queueData.items.length < RADIO_SIZE && !radioPool.length) void extendRadio();
+      }
+      // Gets more tracks for the radio, and resolves true when there is now a track after the current one.
+      function extendRadio() {
+        if (!queueData?.radio) return Promise.resolve(false);
+        radioExtending ??= (async () => {
+          const getJson = async (url) => {
+            const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+            if (!response.ok) throw new Error('unavailable');
+            return response.json();
+          };
+          try {
+            const artistKey = queueData.radio.artistKey;
+            const have = [...queueData.items, ...radioPool].map((track) => track.ratingKey);
+            let more = await gatherRadio({ fetchJson: getJson, artistKey, exclude: have, size: RADIO_SIZE });
+            radioPoolRepeats = false;
+            if (!more.length) {
+              radioPoolRepeats = true;
+              more = await gatherRadio({ fetchJson: getJson, artistKey, exclude: queueData.items.slice(-15).map((track) => track.ratingKey), size: RADIO_SIZE });
+            }
+            radioPool = [...radioPool, ...more];
+            rollRadioWindow({ refill: false });
+            return queueIndex < queue.length - 1;
+          } catch { return false; } finally { radioExtending = null; }
+        })();
+        return radioExtending;
+      }
+      // Shuffle and repeat live in the queue, so they carry from track to track.
+      const REPEAT_KEY = 'freeStuffCrazyPlayer.repeat';
+      const shuffleBtn = document.getElementById('shuffleBtn');
+      const repeatBtn = document.getElementById('repeatBtn');
+      const REPEAT_WORDS = { off: 'off', all: 'all tracks', one: 'this track' };
+      function syncQueueButtons() {
+        const hasQueue = !!queueData && queue.length > 0;
+        shuffleBtn.hidden = repeatBtn.hidden = !hasQueue;
+        if (!hasQueue) return;
+        shuffleBtn.setAttribute('aria-pressed', String(queueData.shuffled));
+        shuffleBtn.title = shuffleBtn.ariaLabel = `Shuffle: ${queueData.shuffled ? 'on' : 'off'}`;
+        const repeat = queueData.repeat;
+        repeatBtn.setAttribute('aria-pressed', String(repeat !== 'off'));
+        repeatBtn.title = repeatBtn.ariaLabel = `Repeat: ${REPEAT_WORDS[repeat]}`;
+        repeatBtn.replaceChildren(iconEl(repeat === 'one' ? 'repeat-one' : 'repeat'));
+        nextTrackBtn.disabled = nextPosition(withIndex(queueData, queueIndex)) === null && !queueData.radio;
+      }
+      function changeQueue(next) {
+        // What plays next may be different now.
+        if (nextPlan && nextPlan.pos !== nextPosition(withIndex(next, next.index), { auto: true })) discardNextPlan();
+        queueData = next;
+        queue = queueData.items;
+        queueIndex = queueData.index;
+        saveQueue(sessionStorage, queueData);
+        const after = queue[queueIndex + 1];
+        nextEpisode = after ? { ratingKey: after.ratingKey, title: after.title, season: after.season ?? null, episode: after.episode ?? null } : null;
+        document.getElementById('musicQueueLabel').textContent = `${queueData.shuffled ? 'Shuffled' : 'Playing from'} · ${queue.length} tracks`;
+        renderQueue();
+        syncQueueButtons();
+      }
+      shuffleBtn.addEventListener('click', () => { if (queueData) changeQueue(queueData.shuffled ? unshuffleQueue(withIndex(queueData, queueIndex)) : shuffleQueue(withIndex(queueData, queueIndex))); });
+      repeatBtn.addEventListener('click', () => {
+        if (!queueData) return;
+        const repeat = nextRepeat(queueData.repeat);
+        try { localStorage.setItem(REPEAT_KEY, repeat); } catch { /* not remembered */ }
+        changeQueue({ ...withIndex(queueData, queueIndex), repeat });
+      });
+      const clock = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
+      const prevTrackBtn = document.getElementById('prevTrackBtn');
+      const nextTrackBtn = document.getElementById('nextTrackBtn');
+      function renderQueue() {
+        const list = document.getElementById('musicQueueList');
+        list.replaceChildren();
+        if (!queue.length) {
+          const empty = document.createElement('li');
+          empty.id = 'musicQueueEmpty';
+          empty.textContent = 'No other tracks to show';
+          list.append(empty);
+          return;
+        }
+        const { from, to } = visibleWindow(queue.length, queueIndex);
+        const note = (text) => { const li = document.createElement('li'); li.id = 'musicQueueEmpty'; li.textContent = text; list.append(li); };
+        if (from > 0) note(`${from} earlier tracks`);
+        queue.slice(from, to).forEach((track, offset) => {
+          const index = from + offset;
+          const item = document.createElement('li');
+          item.className = 'q' + (index === queueIndex ? ' current' : index < queueIndex ? ' played' : '');
+          const button = document.createElement('button');
+          button.type = 'button';
+          if (index === queueIndex) button.setAttribute('aria-current', 'true');
+          const number = document.createElement('span');
+          number.className = 'qNum';
+          if (index === queueIndex) number.append(iconEl('play'));
+          else number.textContent = String(track.episode ?? index + 1);
+          const name = document.createElement('span');
+          name.className = 'qName';
+          name.textContent = track.title;
+          // Every row says who it is by, and from what, as Plex's queue does: not only the ones that differ
+          // from the track playing (in an album's queue that left every row bare).
+          const by = [track.artist, track.album].filter(Boolean).join(' — ');
+          if (by) {
+            const artist = document.createElement('span');
+            artist.className = 'qArtist';
+            artist.textContent = by;
+            name.append(artist);
+          }
+          const length = document.createElement('span');
+          length.className = 'qLen';
+          length.textContent = track.durationMs ? clock(track.durationMs) : '';
+          button.append(number, name, length);
+          button.addEventListener('click', () => {
+            // The track already playing starts again from the beginning (and plays, if it was paused); it is not paused.
+            if (index === queueIndex) { void Promise.resolve(player?.seek(0)).then(() => { if (player?.state !== 'playing') return player?.play(); }); }
+            else goToQueueIndex(index);
+          });
+          item.append(button);
+          list.append(item);
+        });
+        if (to < queue.length) note(`${queue.length - to} more tracks`);
+        list.querySelector('.current')?.scrollIntoView({ block: 'center' });
+      }
+      async function loadMusicQueue(item) {
+        const albumId = String(item.parentKey || '').split('/').filter(Boolean).pop();
+        document.getElementById('musicQueueAlbum').textContent = queueData?.label || item.album || '';
+        if (queueData) {
+          // Pressing Play made this queue; it may span albums, or be shuffled.
+          queue = queueData.items;
+          queueIndex = positionOf(queueData, itemKey);
+          if (queueIndex < 0) { queueData = null; queue = []; }
+        }
+        if (!queueData) {
+          if (!/^[A-Za-z0-9-]{1,64}$/.test(albumId || '')) { renderQueue(); return; }
+          try {
+            const response = await fetch(`/api/library/season/${encodeURIComponent(albumId)}/episodes`, { signal: AbortSignal.timeout(10000) });
+            if (!response.ok) throw new Error('queue unavailable');
+            queue = (await response.json()).filter((track) => track.type === 'track');
+          } catch { queue = []; }
+          queueIndex = queue.findIndex((track) => String(track.ratingKey) === String(itemKey));
+          if (queueIndex < 0) queue = [];
+          // With no queue made by Play (a track opened from an address), the album is the queue, so shuffle and repeat work.
+          if (queue.length) {
+            let repeat = 'off';
+            try { repeat = localStorage.getItem(REPEAT_KEY) || 'off'; } catch { /* off */ }
+            queueData = createQueue({ label: item.album || '', items: queue, start: queueIndex, repeat });
+            queue = queueData.items;
+            if (saveQueue(sessionStorage, queueData)) {
+              const here = new URL(location.href);
+              here.searchParams.set('queue', queueData.id);
+              history.replaceState(null, '', here);
+            }
+          }
+        }
+        const next = queue[queueIndex + 1];
+        if (next) nextEpisode = { ratingKey: String(next.ratingKey), title: next.title, season: next.season ?? null, episode: next.episode ?? null };
+        document.getElementById('musicQueueLabel').textContent = queue.length ? `${queueData?.shuffled ? 'Shuffled' : 'Playing from'} · ${queue.length} tracks` : 'Playing from';
+        renderQueue();
+        prevTrackBtn.hidden = false;
+        nextTrackBtn.hidden = false;
+        nextTrackBtn.disabled = !nextEpisode;
+        syncQueueButtons();
+        // A radio opened part way along (or with a short queue) is brought to its window now.
+        rollRadioWindow();
+      }
+      // Previous restarts the track if it has played a few seconds, as players do.
+      function previousTrack() {
+        const before = queue[queueIndex - 1];
+        if (!before || (player?.clock?.currentTime ?? 0) > 3) player?.seek(0);
+        else goToQueueIndex(queueIndex - 1);
+      }
+      // Show a skip button as working from the tap until the track has changed (or a few seconds, if nothing came of it).
+      let skipBusyTimer = null;
+      function setSkipBusy(button) {
+        for (const other of [prevTrackBtn, nextTrackBtn]) { other.classList.toggle('skipping', other === button); other.setAttribute('aria-busy', other === button ? 'true' : 'false'); }
+        clearTimeout(skipBusyTimer);
+        if (button) skipBusyTimer = setTimeout(() => setSkipBusy(null), 10000);
+        // The bar on the library page shows it too, whichever way the skip was asked for (its own button or the wheel).
+        if (button) broadcastMusic(true);
+      }
+      prevTrackBtn.addEventListener('click', () => {
+        if (skipping) return;
+        const before = queue[queueIndex - 1];
+        // Restarting this track is instant: only a move to another track needs the wait.
+        if (before && (player?.clock?.currentTime ?? 0) <= 3) setSkipBusy(prevTrackBtn);
+        previousTrack();
+      });
+      nextTrackBtn.addEventListener('click', () => {
+        if (skipping || nextTrackBtn.classList.contains('skipping')) return;
+        if (isMusic && queue.length) setSkipBusy(nextTrackBtn);
+        playNextEpisode();
+      });
+
+      // The cover and lists end where the controls begin, however tall the controls are (they wrap onto a
+      // second row on a narrow screen), so the last track and the last line are never hidden under them.
+      function fitMusicCover() {
+        const cover = document.getElementById('musicCover');
+        const controls = document.getElementById('controls');
+        const fit = () => { cover.style.bottom = `${controls.offsetHeight + 8}px`; };
+        fit();
+        if (typeof ResizeObserver === 'function') new ResizeObserver(fit).observe(controls);
+        window.addEventListener('resize', fit);
+      }
+
+      // ---- Held by the browse page ----
+      // What the page's bar shows, and what it may ask of the player. Only this site's own page, which holds
+      // this frame, is listened to; see music-host.js for what is believed.
+      const musicMeta = { title: '', artist: '', album: '', thumbnail: null };
+      let lastBroadcast = -Infinity;
+      function broadcastMusic(force = false) {
+        if (!embedded || !isMusic) return;
+        const now = performance.now();
+        if (!force && now - lastBroadcast < 1000) return;
+        lastBroadcast = now;
+        const next = queueData ? (nextPosition(withIndex(queueData, queueIndex)) !== null || !!queueData.radio) : !!queue[queueIndex + 1];
+        window.parent.postMessage({
+          type: MUSIC_MESSAGE, event: 'state', state: player?.state ?? 'loading', playing: player?.wantsPlayback === true, key: itemKey, queue: queueData?.id ?? null, ...musicMeta,
+          position: player?.clock?.currentTime ?? 0, duration: player?.duration ?? 0, hasNext: next, hasPrevious: queueIndex > 0,
+          skipping: nextTrackBtn.classList.contains('skipping') ? 'next' : prevTrackBtn.classList.contains('skipping') ? 'previous' : null,
+        }, location.origin);
+      }
+      window.addEventListener('message', (event) => {
+        if (!embedded || !fromParent(event, window.parent, location.origin)) return;
+        const command = cleanCommand(event.data);
+        if (!command) return;
+        if (command.name === 'toggle') document.getElementById('playPauseBtn').click();
+        else if (command.name === 'play') player?.play();
+        else if (command.name === 'pause') player?.pause();
+        else if (command.name === 'next') nextTrackBtn.click();
+        else if (command.name === 'previous') previousTrack();
+        else if (command.name === 'seek') player?.seek(command.seconds);
+        else if (command.name === 'stop') { try { player?.pause(); } catch { /* already stopped */ } }
+      });
+
+      // ---- Gapless: the next track, opened while this one plays ----
+      // Music only. Near the end of a track the next one is started and its audio queued behind this one's in
+      // the same output, so it follows on without a pause or a reload. If anything about that fails, the end of
+      // the track works as it always did: the page goes to the next track.
+      // The server allows a viewer one stream: starting the next track's stream ends this one's session with the
+      // media server. So it is only started once the rest of this track is already downloaded here, and from then
+      // on the page reports under the new stream's id, which is the one the server now counts as the viewer's.
+      const PREPARE_BEFORE_END_SECONDS = 45;
+      const PREPARE_RETRY_AFTER_MS = 20000;
+      let nextPlan = null; // { key, pos, id, item, ready }
+      let lastPlanFailureAt = -Infinity;
+      let trackDuration = 0;
+      let heartbeatsPaused = false;
+      // A report already on its way when a new stream starts reaches the server after that stream replaced the one it
+      // names, and would be told the account is over its limit. Each change bumps this, so such an answer is ignored.
+      let usageEpoch = 0;
+      function setHeartbeatsPaused(value) { heartbeatsPaused = value; usageEpoch += 1; }
+      // Tell the server a stream we opened will not be played, so it does not count against the account.
+      function releaseStream(id) {
+        try { navigator.sendBeacon?.('/api/playback/usage', new Blob([JSON.stringify({ playbackId: id, state: 'stopped' })], { type: 'application/json' })); } catch { /* it expires */ }
+      }
+      function discardNextPlan() {
+        const plan = nextPlan;
+        nextPlan = null;
+        if (!plan) return;
+        player?.discardNext?.();
+        // Once it is the stream the server counts as ours, it is not ours to stop: the track still playing is
+        // reported under it, and whatever plays next replaces it.
+        if (plan.id !== playbackId) releaseStream(plan.id);
+      }
+      // Does the server count this id as the viewer's current stream? (A report under it says so.)
+      async function claimStream(id) {
+        try {
+          const response = await fetch('/api/playback/usage', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true, signal: AbortSignal.timeout(5000),
+            body: JSON.stringify({ playbackId: id, state: player.state === 'playing' ? 'playing' : 'paused' }),
+          });
+          return response.ok;
+        } catch { return false; }
+      }
+      async function prepareNextTrack() {
+        if (nextPlan || !isMusic || isLive || movingOn || selection.mode !== 'canvas' || !queueData || typeof player?.prepareNext !== 'function') return;
+        const pos = nextPosition(withIndex(queueData, queueIndex), { auto: true });
+        const track = pos === null ? null : queueData.items[pos];
+        if (!track) return;
+        const plan = { key: String(track.ratingKey), pos, id: newPlaybackId(), item: null, ready: false };
+        nextPlan = plan;
+        // While its stream starts, the server is between two streams: report nothing, so neither report is refused.
+        setHeartbeatsPaused(true);
+        let opened = false;
+        try {
+          const params = new URLSearchParams({ quality: currentQuality, playbackId: plan.id, key: plan.key });
+          const [item] = await Promise.all([
+            fetch(`/api/library/item/${encodeURIComponent(plan.key)}`, { signal: AbortSignal.timeout(10000) }).then((res) => (res.ok ? res.json() : null)),
+            player.prepareNext(`/api/start?${params}`, { readAheadSeconds: MUSIC_READ_AHEAD_SECONDS, readAheadParallelism: MUSIC_READ_AHEAD_PARALLELISM }),
+          ]);
+          opened = true;
+          if (nextPlan !== plan) return; // dropped while it was opening
+          if (!item || item.type !== 'track') throw new Error('next track details unavailable');
+          plan.item = item;
+          if (!(await claimStream(plan.id))) throw new Error('next stream not accepted');
+          playbackId = plan.id;
+          plan.ready = true;
+        } catch {
+          if (nextPlan === plan) {
+            nextPlan = null;
+            lastPlanFailureAt = performance.now();
+            player.discardNext?.();
+          }
+          // If its stream did start, the server counts it as ours now, whatever came after.
+          if (playbackId !== plan.id && await claimStream(plan.id)) playbackId = plan.id;
+        } finally {
+          setHeartbeatsPaused(false);
+        }
+      }
+      // The player is now on another track's audio: the page follows (its title, queue, address and reports).
+      function followToTrack(plan) {
+        const finished = { key: itemKey };
+        // The track that was playing has played out (or been skipped past).
+        if (finished.key && trackDuration > 0) {
+          const ms = Math.round(trackDuration * 1000);
+          fetch('/api/library/progress', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+            body: JSON.stringify({ ratingKey: finished.key, timeMs: plan.leftAtMs ?? ms, state: 'stopped', durationMs: ms }),
+          }).catch(() => {});
+        }
+        // (Its stream was replaced when this one's started, so there is nothing to release.)
+        playbackId = plan.id;
+        itemKey = plan.key;
+        lastReportedMs = -1;
+        trackDuration = player.duration;
+        changeQueue(withIndex(queueData, plan.pos));
+        rollRadioWindow(); // a radio drops what was played long ago and adds to the end (before anything reads positions below)
+        seekBar.max = String(Math.floor(player.duration));
+        seekBar.value = '0';
+        timeLabel.textContent = `${fmtTime(0)} / ${fmtTime(player.duration)}`;
+        try {
+          const here = new URL(location.href);
+          here.searchParams.set('key', itemKey);
+          here.searchParams.set('resume', '0');
+          history.replaceState(null, '', here);
+        } catch { /* the address stays as it was */ }
+        showMusicTrack(plan.item);
+        broadcastMusic(true);
+      }
+      // The player has carried on into the next track's audio on its own.
+      function beginNextTrack() {
+        const plan = nextPlan;
+        if (!plan?.ready) return;
+        nextPlan = null;
+        followToTrack(plan);
+      }
+      // Move to another track in the queue without reloading the page: the one already opened ahead if that is the
+      // one wanted, otherwise a stream started now. Resolves false if it could not, and the caller reloads instead.
+      let skipping = false;
+      async function skipToTrack(pos) {
+        const track = queueData?.items[pos];
+        if (!track || movingOn || isLive || skipping || !isMusic || selection.mode !== 'canvas' || typeof player?.adoptPrepared !== 'function') return false;
+        skipping = true;
+        setHeartbeatsPaused(true);
+        // A track that has just played out has already cleared wantsPlayback (finishIfPlayedOut), but moving on
+        // from it is still playing: only a paused player stays paused on the next track.
+        const wanted = player.wantsPlayback || player.state === 'ended';
+        const leftAtMs = Math.round((player.clock?.currentTime || 0) * 1000);
+        try {
+          let plan = nextPlan?.ready && nextPlan.pos === pos && nextPlan.id === playbackId ? nextPlan : null;
+          if (plan) {
+            nextPlan = null;
+            if (!(await player.adoptPrepared())) throw new Error('prepared track gone');
+          } else {
+            discardNextPlan();
+            plan = { key: String(track.ratingKey), pos, id: newPlaybackId(), item: null, ready: true };
+            const params = new URLSearchParams({ quality: currentQuality, playbackId: plan.id, key: plan.key });
+            const [item] = await Promise.all([
+              fetch(`/api/library/item/${encodeURIComponent(plan.key)}`, { signal: AbortSignal.timeout(10000) }).then((res) => (res.ok ? res.json() : null)),
+              player.load(`/api/start?${params}`, { readAheadSeconds: MUSIC_READ_AHEAD_SECONDS, readAheadParallelism: MUSIC_READ_AHEAD_PARALLELISM }),
+            ]);
+            if (!item || item.type !== 'track') throw new Error('track details unavailable');
+            plan.item = item;
+          }
+          followToTrack({ ...plan, leftAtMs });
+          if (wanted) await player.play();
+          return true;
+        } catch {
+          return false;
+        } finally {
+          skipping = false;
+          setHeartbeatsPaused(false);
+          setSkipBusy(null);
+        }
+      }
+      // Called with every report of the player's progress.
+      function keepNextTrackReady(stats) {
+        if (!isMusic || isLive) return;
+        const length = player.duration;
+        if (Number.isFinite(length) && length > 0) trackDuration = length;
+        // Opened ahead but gone from the player (a seek dropped it): let go of it, and try again later.
+        if (nextPlan?.ready && !player.prepared && !player.chained) nextPlan = null;
+        if (!nextPlan && Number.isFinite(length) && length > 0 && length - stats.mediaTime <= PREPARE_BEFORE_END_SECONDS
+          && performance.now() - lastPlanFailureAt > PREPARE_RETRY_AFTER_MS
+          && player.prefetcher?.hasAllAhead?.()) void prepareNextTrack();
+      }
+
+      // ---- Lyrics ----
+      // The button appears when the track has lyrics. Pressing it swaps the queue for the words; timed
+      // lyrics light the line being sung and keep it in view, and tapping a line jumps to it. Whether the
+      // panel was open is remembered, so the next track opens with it.
+      const LYRICS_OPEN_KEY = 'freeStuffCrazyPlayer.lyricsOpen';
+      const lyricsBtn = document.getElementById('lyricsBtn');
+      const lyricLinesEl = document.getElementById('lyricLines');
+      function lyricsMessage(text) {
+        lyricLinesEl.className = '';
+        const li = document.createElement('li');
+        li.id = 'lyricsMessage';
+        li.textContent = text;
+        lyricLinesEl.replaceChildren(li);
+        lyricState.els = [];
+      }
+      function renderLyrics() {
+        const { data, sets, index } = lyricState;
+        const set = sets[index];
+        document.getElementById('musicLyricsSource').textContent = set?.label ? `Powered by ${set.label}` : '';
+        document.getElementById('musicLyricsVersion').hidden = sets.length < 2;
+        document.getElementById('lyricsCount').textContent = `${index + 1} of ${sets.length}`;
+        if (!data || !data.lines.length) { lyricsMessage('No lyrics for this track'); return; }
+        lyricLinesEl.className = data.timed ? 'timed' : '';
+        lyricState.els = data.lines.map((line) => {
+          const li = document.createElement('li');
+          if (!line.text) li.className = 'gap';
+          else li.textContent = line.text;
+          if (data.timed && line.startMs !== null && line.text) {
+            li.addEventListener('click', () => player?.seek(line.startMs / 1000));
+          }
+          return li;
+        });
+        lyricLinesEl.replaceChildren(...lyricState.els);
+        lyricState.active = -1;
+        updateLyrics(player?.clock?.currentTime ?? 0, { instant: true });
+      }
+      async function showLyricSet(index) {
+        const set = lyricState.sets[index];
+        if (!set) return;
+        lyricState.index = index;
+        lyricState.data = null;
+        lyricsMessage('Loading lyrics…');
+        try {
+          const response = await fetch(`/api/library/lyric/${encodeURIComponent(itemKey)}/${encodeURIComponent(set.id)}`, { signal: AbortSignal.timeout(15000) });
+          if (!response.ok) throw new Error('unavailable');
+          lyricState.data = await response.json();
+        } catch { lyricsMessage('Lyrics could not be loaded'); return; }
+        renderLyrics();
+      }
+      function setLyricsOpen(open) {
+        lyricState.open = open;
+        document.getElementById('musicCover').classList.toggle('showLyrics', open);
+        lyricsBtn.setAttribute('aria-pressed', String(open));
+        try { localStorage.setItem(LYRICS_OPEN_KEY, open ? '1' : '0'); } catch { /* not remembered */ }
+        if (open && !lyricState.data && lyricState.sets.length) showLyricSet(lyricState.index);
+      }
+      async function loadLyricSets(trackId) {
+        try {
+          const response = await fetch(`/api/library/lyrics/${encodeURIComponent(trackId)}`, { signal: AbortSignal.timeout(8000) });
+          if (!response.ok) return;
+          // A set with times first: it can follow the song.
+          lyricState.sets = ((await response.json()).tracks || []).sort((a, b) => Number(b.timed) - Number(a.timed));
+        } catch { return; }
+        if (!lyricState.sets.length) return;
+        lyricsBtn.hidden = false;
+        let remembered = false;
+        try { remembered = localStorage.getItem(LYRICS_OPEN_KEY) === '1'; } catch { /* closed */ }
+        if (remembered) setLyricsOpen(true);
+      }
+      // A new track (gapless music moving on): the last one's words go, and this one's are looked for.
+      function resetLyrics() {
+        Object.assign(lyricState, { open: false, sets: [], index: 0, data: null, active: -1, els: [], userScrolledAt: 0 });
+        document.getElementById('musicCover').classList.remove('showLyrics');
+        lyricsBtn.hidden = true;
+        lyricsBtn.setAttribute('aria-pressed', 'false');
+        lyricLinesEl.replaceChildren();
+      }
+      lyricsBtn.addEventListener('click', () => setLyricsOpen(!lyricState.open));
+      document.getElementById('lyricsPrev').addEventListener('click', () => showLyricSet((lyricState.index + lyricState.sets.length - 1) % lyricState.sets.length));
+      document.getElementById('lyricsNext').addEventListener('click', () => showLyricSet((lyricState.index + 1) % lyricState.sets.length));
+      // Reading ahead by scrolling should not be undone at once by the line that follows the song.
+      lyricLinesEl.addEventListener('wheel', () => { lyricState.userScrolledAt = performance.now(); }, { passive: true });
+      lyricLinesEl.addEventListener('touchmove', () => { lyricState.userScrolledAt = performance.now(); }, { passive: true });
+      function updateLyrics(seconds, { instant = false } = {}) {
+        const { data } = lyricState;
+        if (!lyricState.open || !data?.timed || !Number.isFinite(seconds)) return;
+        const now = activeLine(data.lines, seconds * 1000);
+        if (now === lyricState.active) return;
+        const previous = lyricState.active;
+        lyricState.active = now;
+        const from = Math.max(0, Math.min(previous, now));
+        const to = Math.min(lyricState.els.length - 1, Math.max(previous, now));
+        for (let i = from; i <= to; i++) {
+          lyricState.els[i].classList.toggle('active', i === now);
+          lyricState.els[i].classList.toggle('past', i < now);
+        }
+        if (now >= 0 && performance.now() - lyricState.userScrolledAt > 4000) {
+          lyricState.els[now].scrollIntoView({ block: 'center', behavior: instant ? 'auto' : 'smooth' });
+        }
+      }
       const nextCountdown = createNextCountdown({
         onTick: (seconds) => {
           playNextBtn.classList.add('counting');
@@ -1190,12 +1976,14 @@
       }
       function updateNextButton() {
         if (nextCountdown.active) return;
+        if (isMusic) { playNextBtn.hidden = true; return; } // the controls have Next
         const length = player?.duration;
         playNextBtn.hidden = !(nextEpisode && Number.isFinite(length) && length > 0
           && player.clock.currentTime / length >= watchedAt);
       }
       // At the end, give the viewer a few seconds to cancel before moving on.
       function startNextCountdown() {
+        if (isMusic && queue.length && !movingOn) { goNext({ auto: true }); return; }
         if (!nextEpisode || movingOn || isLive || declinedNext || nextCountdown.active) return;
         playNextBtn.hidden = false;
         cancelNextBtn.hidden = false;
@@ -1213,11 +2001,18 @@
         if (nextCountdown.cancel()) resetNextButton();
       }
       function playNextEpisode() {
-        if (!nextEpisode || movingOn || isLive) return;
+        if (isMusic && queue.length) { goNext({ auto: false }); return; }
+        if (nextEpisode) goToItem(nextEpisode.ratingKey);
+      }
+      function goToItem(ratingKey, { queue: queueId = null } = {}) {
+        if (movingOn || isLive) return;
         nextCountdown.cancel();
         movingOn = true;
+        discardNextPlan();
         const target = new URL('/canvas2', location.origin);
-        target.searchParams.set('key', nextEpisode.ratingKey);
+        target.searchParams.set('key', ratingKey);
+        if (queueId) target.searchParams.set('queue', queueId);
+        if (embedded) target.searchParams.set('embedded', '1');
         // Keep where we came from and how the viewer plays; quality is chosen afresh.
         for (const name of ['playback']) {
           if (urlParams.has(name)) target.searchParams.set(name, urlParams.get(name));
@@ -1228,6 +2023,56 @@
       }
       playNextBtn.addEventListener('click', playNextEpisode);
       cancelNextBtn.addEventListener('click', cancelNextCountdown);
+
+      // What the screen, the bar and the media controls show for the track playing now.
+      function showMusicTrack(item, { initial = false } = {}) {
+        isMusic = true;
+        const artist = item.artist || item.showTitle || '';
+        titleDisplayEl.textContent = artist ? `${artist} — ${item.title}` : item.title;
+        document.getElementById('musicCoverImg').src = item.thumbnail || '';
+        Object.assign(musicMeta, { title: item.title, artist, album: item.album || '', thumbnail: item.thumbnail || null });
+        broadcastMusic(true);
+        document.getElementById('musicCoverTitle').textContent = item.title;
+        // The artist and the album are links to their screens, from the library this was reached in. (Leaving
+        // this page ends the music: it is a page of its own, not a player that stays while you browse.)
+        const tab = readBrowseView(location.search).tab || item.librarySectionId || null;
+        const artistId = idFromKey(item.grandparentKey);
+        const albumId = idFromKey(item.parentKey);
+        const parts = [
+          [artist, artistId ? browseUrlFor({ tab, view: 'artists', show: artistId }) : null],
+          [item.album, artistId && albumId ? browseUrlFor({ tab, show: artistId, season: albumId }) : null],
+        ];
+        const sub = document.getElementById('musicCoverSub');
+        sub.replaceChildren();
+        for (const [text, href] of parts) {
+          if (!text) continue;
+          if (sub.childNodes.length) sub.append(' · ');
+          if (href) {
+            const link = document.createElement('a');
+            link.href = href;
+            // Held by the browse page, the link goes there in that page (it cannot be shown in this frame).
+            if (embedded) link.addEventListener('click', (ev) => { ev.preventDefault(); window.parent.postMessage({ type: MUSIC_MESSAGE, event: 'navigate', url: href }, location.origin); });
+            link.textContent = text;
+            sub.append(link);
+          } else sub.append(text);
+        }
+        document.getElementById('musicCover').hidden = false;
+        if (initial) fitMusicCover();
+        playNextBtn.hidden = true;
+        // A music player: no picture to fade the controls from, no 30-second skips.
+        document.getElementById('back30').style.display = 'none';
+        document.getElementById('fwd30').style.display = 'none';
+        document.getElementById('watchedControls').style.display = 'none';
+        keepControlsUp = true;
+        showOverlay();
+        if (initial) loadMusicQueue(item);
+        else resetLyrics();
+        loadLyricSets(item.ratingKey);
+        mediaControls.setMetadata({
+          title: item.title, artist, album: item.album || '',
+          artwork: item.thumbnail ? [{ src: item.thumbnail, sizes: '480x480', type: 'image/jpeg' }] : [],
+        });
+      }
 
       // Use the supplied title for live playback; fetch VOD metadata asynchronously.
       const titleDisplayEl = document.getElementById('titleDisplay');
@@ -1247,6 +2092,10 @@
           .then((res) => (res.ok ? res.json() : null))
           .then((item) => {
             if (!item) return;
+            if (item.type === 'track') {
+              showMusicTrack(item, { initial: true });
+              return;
+            }
             titleDisplayEl.textContent = item.showTitle
               ? `${item.showTitle} — S${item.season}E${item.episode} ${item.title}`
               : item.title;
@@ -1299,7 +2148,7 @@
         try { player.pause(); } catch { /* already stopped */ }
         const resetText = resetAt ? ` More time unlocks ${new Date(resetAt).toLocaleString()}.` : '';
         showBanner(`You're out of watch time.${resetText}`, { persist: true });
-        setTimeout(() => location.replace(returnUrl), 4000);
+        setTimeout(leavePlayer, 4000);
       }
 
       let streamLimitHandled = false;
@@ -1316,18 +2165,21 @@
       let usageInFlight = false;
       let queuedPlaybackState = null;
       reportPlaybackState = (state, {beacon=false} = {}) => {
-        if(quotaExceededHandled || streamLimitHandled)return;
+        if(quotaExceededHandled || streamLimitHandled || heartbeatsPaused)return;
         // /api/start registers this playback ID; a report before then looks
         // like an expired session and would tear down a stream about to begin.
         if(!playbackRegistered)return;
         if(usageInFlight && !beacon){queuedPlaybackState=state;return;}
         const body=JSON.stringify({playbackId,state});
+        const sentEpoch=usageEpoch;
         if(beacon && navigator.sendBeacon){navigator.sendBeacon('/api/playback/usage',new Blob([body],{type:'application/json'}));return;}
         usageInFlight=true;
         fetch('/api/playback/usage',{method:'POST',headers:{'Content-Type':'application/json'},body,keepalive:true,signal:AbortSignal.timeout(5000)})
           .then(async response=>{
             const data=await response.json().catch(()=>null);
             if(data?.quota && Number.isFinite(data.quota.remainingSeconds))quotaRemainingSeconds=data.quota.remainingSeconds;
+            // Answered after the stream it was about was replaced by a track change here: nothing to act on.
+            if(sentEpoch!==usageEpoch || heartbeatsPaused)return;
             if(response.status===403 && data?.code==='QUOTA_EXCEEDED')handleQuotaExceeded(data.resetAt);
             if(response.status===409 && data?.code==='ACCOUNT_STREAM_LIMIT')handleStreamLimit();
             if(response.status===409 && data?.code==='PLAYBACK_EXPIRED'){
@@ -1553,16 +2405,19 @@
         const startUrl = `/api/start?${startParams}`;
         // A lower tier means the connection already looked weak, so download
         // further ahead whenever it has capacity to spare.
-        const readAheadSeconds = READ_AHEAD_SECONDS[currentQuality] || 0;
+        // Music always reads three minutes ahead (most of a track): its audio is about 2 MB a minute, and without
+        // it every segment waits out a full round trip on the car's connection, which drains the buffer.
+        const readAheadSeconds = queueData ? MUSIC_READ_AHEAD_SECONDS : READ_AHEAD_SECONDS[currentQuality] || 0;
+        const readAheadParallelism = queueData ? MUSIC_READ_AHEAD_PARALLELISM : undefined;
         const startTime = resumeSeconds;
         try {
-          await player.load(startUrl + (directAttempt ? '&direct=1' : ''), { direct: directAttempt, readAheadSeconds, startTime });
+          await player.load(startUrl + (directAttempt ? '&direct=1' : ''), { direct: directAttempt, readAheadSeconds, readAheadParallelism, startTime });
         } catch (error) {
           if (await rejectBlockedPlayback(error)) return;
           if (!directAttempt) throw error;
           directAttempt = false;
           showBanner('Direct connection unavailable — using server relay');
-          try { await player.load(startUrl, { readAheadSeconds, startTime }); }
+          try { await player.load(startUrl, { readAheadSeconds, readAheadParallelism, startTime }); }
           catch (fallbackError) {
             if (await rejectBlockedPlayback(fallbackError)) return;
             throw fallbackError;
@@ -1579,13 +2434,18 @@
         log(`resuming at ${fmtTime(resumeSeconds)}…`);
         // The Canvas player already loaded at the resume point; the standard player still needs the seek.
         if (Math.abs(player.clock.currentTime - resumeSeconds) > 0.5) await player.seek(resumeSeconds);
-        showBanner(`Resuming at ${fmtTime(resumeSeconds)} — tap to start from the beginning`, {
-          onClick: async () => {
-            hideBanner();
-            lastReportedMs = -1; // allow forward reports again after seeking back past the old mark
-            await player.seek(0);
-          },
-        });
+        // Music picks up where it was without saying so: a song is not something to "start from the
+        // beginning" with a tap. (A music page has a queue in its address from the start, before the
+        // track's details have told us it is a track.)
+        if (!isMusic && !urlParams.has('queue')) {
+          showBanner(`Resuming at ${fmtTime(resumeSeconds)} — tap to start from the beginning`, {
+            onClick: async () => {
+              hideBanner();
+              lastReportedMs = -1; // allow forward reports again after seeking back past the old mark
+              await player.seek(0);
+            },
+          });
+        }
       }
 
       if (isLive && !showingStillImage) updateLiveLabel(player.state);
@@ -1643,7 +2503,7 @@
           return;
         }
         watchStateJustChanged = true;
-        location.replace(returnUrl);
+        leavePlayer();
       });
       document.getElementById('markUnwatchedBtn').addEventListener('click', async () => {
         if (!itemKey) return;
@@ -1654,7 +2514,7 @@
           return;
         }
         watchStateJustChanged = true;
-        location.replace(returnUrl);
+        leavePlayer();
       });
       if (isLive) {
         let jumpingToLive = false;

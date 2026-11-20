@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import {Player} from '../public/engine/player.js';
 import { AudioRingBuffer } from '../public/engine/audio-ring-buffer.js';
 import { AudioSample } from '../public/vendor/mediabunny.mjs';
-import { estimateAudioOutputLatencySeconds } from '../public/engine/presentation-clock.js';
+import { estimateAudioOutputLatencySeconds, PresentationClock } from '../public/engine/presentation-clock.js';
 function frame(timestamp){return {timestamp,duration:1/30,draws:0,closed:0,draw(){this.draws++;},close(){this.closed++;}};}
 function player(frames){const p=Object.create(Player.prototype);Object.assign(p,{videoTrack:{},videoQueue:frames,canvas:{width:1280,height:720},context:{},videoDropCount:0,videoRenderCount:0,firstVideoRendered:false});return p;}
 test('renders directly from the sample and releases displayed and skipped frames',()=>{
@@ -350,4 +350,118 @@ test('pressing play after the end starts again from the beginning', async () => 
   await p.play();
   assert.equal(p.wantsPlayback, true);
   assert.deepEqual(seeks, [0]);
+});
+
+// Gapless music: the next track's audio is queued straight behind this one's, in the same output.
+function chainingPlayer() {
+  const p = player([]);
+  const ring = new AudioRingBuffer({ capacityFrames: 100, channels: 1 });
+  const clock = new PresentationClock();
+  clock.useAudioRing(ring, 10);
+  clock.reset(0);
+  const changes = [];
+  Object.assign(p, {
+    generation: 1, destroyed: false, isLive: false, duration: 2, audioRing: ring, clock, prepared: null, preparing: null, chained: null,
+    audioEnded: false, onTrackChange: (info) => changes.push(info), fail(error) { throw error; },
+  });
+  return { p, ring, clock, changes };
+}
+const valued = (timestamp, value, frames = 10) => ({
+  timestamp, sampleRate: 10, numberOfFrames: frames, numberOfChannels: 1,
+  copyTo(destination) { destination.fill(value); }, close() {},
+});
+function preparedTrack(duration, packets) {
+  let at = 1;
+  return {
+    input: { dispose() { this.disposed = true; } }, prefetcher: { dispose() { this.disposed = true; } }, track: { id: 'next' }, sink: { id: 'next' },
+    duration, first: { value: packets[0], done: false },
+    iterator: { async next() { return at < packets.length ? { value: packets[at++], done: false } : { value: undefined, done: true }; }, async return() {} },
+  };
+}
+async function* firstTrack() { yield valued(0, 1); yield valued(1, 1); }
+
+test('the next track carries straight on from the end of this one, with no gap', async () => {
+  const { p, ring } = chainingPlayer();
+  p.prepared = preparedTrack(2, [valued(0, 2), valued(1, 2)]);
+  await p.produceAudio(1, 0, firstTrack());
+  assert.equal(ring.availableFrames, 40);
+  assert.deepEqual([...ring.audio.slice(0, 40)], [...Array(20).fill(1), ...Array(20).fill(2)]);
+  assert.equal(p.chained.track.id, 'next');
+  assert.equal(p.prepared, null);
+  assert.equal(p.clock.chainFrame, 20, 'the boundary is where the first track ended');
+  assert.equal(p.audioEnded, true, 'and the output ends when the last track does');
+});
+
+test('crossing into the chained track switches what the player is playing, and says so', async () => {
+  const { p, ring, clock, changes } = chainingPlayer();
+  const first = { input: { dispose() { this.disposed = true; } }, prefetcher: { dispose() { this.disposed = true; } } };
+  Object.assign(p, { input: first.input, prefetcher: first.prefetcher });
+  p.prepared = preparedTrack(180, [valued(0, 2)]);
+  await p.produceAudio(1, 0, firstTrack());
+  const next = p.chained;
+  ring.header[4] = 15; // playing the first track still (output frame 15 of 20)
+  assert.equal(clock.takeCrossing(), false);
+  ring.header[4] = 23; // three frames into the next
+  assert.equal(clock.takeCrossing(), true);
+  p.commitChained();
+  assert.equal(p.duration, 180);
+  assert.equal(p.input, next.input);
+  assert.equal(p.audioSink, next.sink);
+  assert.equal(first.input.disposed, true, 'the finished track is let go');
+  assert.equal(first.prefetcher.disposed, true);
+  assert.equal(p.chained, null);
+  assert.deepEqual(changes, [{ duration: 180 }]);
+  assert.ok(Math.abs(clock.currentTime - 0.3) < 1e-9, 'time is now three frames into the next track');
+});
+
+test('with no next track ready, the output simply ends', async () => {
+  const { p, ring } = chainingPlayer();
+  await p.produceAudio(1, 0, firstTrack());
+  assert.equal(ring.availableFrames, 20);
+  assert.equal(p.chained, null);
+  assert.equal(p.audioEnded, true);
+});
+
+test('a next track still opening is waited for briefly', async () => {
+  const { p, ring } = chainingPlayer();
+  p.preparing = new Promise((resolve) => setTimeout(() => { p.prepared = preparedTrack(2, [valued(0, 2)]); resolve(); }, 20));
+  await p.produceAudio(1, 0, firstTrack());
+  assert.equal(ring.availableFrames, 30);
+  assert.equal(p.chained.track.id, 'next');
+});
+
+test('a seek drops a track already queued behind, and a new load drops one opened ahead', () => {
+  const { p } = chainingPlayer();
+  const queued = preparedTrack(2, [valued(0, 2)]);
+  const opened = preparedTrack(2, [valued(0, 3)]);
+  p.chained = queued; p.prepared = opened;
+  p.clock.chainAt(20);
+  p.discardChained();
+  assert.equal(p.chained, null);
+  assert.equal(queued.input.disposed, true);
+  assert.equal(p.clock.chainFrame, null);
+  assert.equal(p.prepared, opened, 'one only opened ahead is still good after a seek');
+  p.discardNext();
+  assert.equal(p.prepared, null);
+  assert.equal(opened.input.disposed, true);
+});
+
+test('skipping to the track opened ahead plays it from its start and lets go of the old one', async () => {
+  const { p } = chainingPlayer();
+  const old = { input: { dispose() { this.disposed = true; } }, prefetcher: { dispose() { this.disposed = true; } } };
+  const restarts = [];
+  Object.assign(p, { input: old.input, prefetcher: old.prefetcher, wantsPlayback: false, setState() {}, updatePlaybackBarrier() {},
+    async restartProducers(time) { restarts.push(time); } });
+  const next = preparedTrack(200, [valued(0, 2)]);
+  p.prepared = next;
+  assert.equal(await p.adoptPrepared(), true);
+  assert.deepEqual(restarts, [0]);
+  assert.equal(p.input, next.input);
+  assert.equal(p.audioSink, next.sink);
+  assert.equal(p.duration, 200);
+  assert.equal(p.prepared, null);
+  assert.equal(old.input.disposed, true);
+  assert.equal(old.prefetcher.disposed, true);
+  assert.equal(next.input.disposed, undefined, 'the track now playing is kept');
+  assert.equal(await p.adoptPrepared(), false, 'nothing left to adopt');
 });

@@ -4,6 +4,8 @@ Watch your Plex or Jellyfin library in a Tesla browser. A passenger can use it w
 
 The FreeStuffCrazy Player is open source and can be self hosted.
 
+New to media servers? [Getting started with Jellyfin](GETTING_STARTED_WITH_JELLYFIN.md) walks a beginner through installing Jellyfin, downloading free movies from the Internet Archive, and watching them in a browser.
+
 ## Try the hosted player before you self host
 
 Open **<https://player.freestuffcrazy.com>**, choose Plex, Jellyfin or Emby, and sign in. Nothing is installed in the car, and your media stays on your server. The hosted version comes from extra server capacity at [FreeStuffCrazy.com](https://freestuffcrazy.com) and is subject to change without notice. A Tesla's cellular connection can be slow; tethering to your phone has worked better for us ([FAQ](FAQ.md#video-is-slow-or-keeps-buffering-in-a-tesla)).

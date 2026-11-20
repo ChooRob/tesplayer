@@ -293,3 +293,11 @@ test('the configured server still works, and its named admin is recognized there
   const typed = await signIn('https://home.example/');
   assert.equal(credentialOf(typed.cookie).serverUrl, undefined);
 });
+
+test('a password is never sent to the configured server when the sign-in lost track of the server chosen', async () => {
+  home.calls.length = 0;
+  const lost = await request('/api/auth/jellyfin/password', { method: 'POST', body: { username: 'pat', password: 'secret' } });
+  assert.equal(lost.status, 400);
+  assert.match(lost.json.error, /start again/);
+  assert.equal(home.calls.filter(url => url.pathname === '/Users/AuthenticateByName').length, 0, 'no password reached the configured server');
+});

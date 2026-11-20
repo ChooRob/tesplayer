@@ -1,6 +1,6 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -56,6 +56,25 @@ globalThis.fetch = async (value, options = {}) => {
   if (p === '/accounts') return json({ MediaContainer: { Account: [{ id: 1, name: 'Owner' }] } });
   if (p === '/library/sections') return json({ MediaContainer: { Directory: [{ key: '1', title: 'Movies', type: 'movie' }] } });
   if (p === '/library/metadata/5') return json({ MediaContainer: { Metadata: [{ ratingKey: '5', type: 'movie', title: 'Test Movie', year: 2020, duration: 100000, thumb: '/library/metadata/5/thumb/1' }] } });
+  if (p === '/library/metadata/7') return json({ MediaContainer: { Metadata: [{ ratingKey: '7', type: 'track', title: 'A Song', index: 2, parentIndex: 1, parentKey: '/library/metadata/200', grandparentKey: '/library/metadata/100', parentTitle: 'An Album', grandparentTitle: 'An Artist', duration: 200000, thumb: '/library/metadata/7/thumb/1', Media: [{ Part: [{ Stream: [{ id: 70, streamType: 4, provider: 'com.plexapp.agents.lyricfind', timed: 1 }] }] }] }] } });
+  if (p === '/library/streams/70') return new Response('<Lyrics><Line startOffset="2000"><Span>La la</Span></Line></Lyrics>');
+  if (p === '/playlists') return json({ MediaContainer: { Metadata: [{ ratingKey: '900', type: 'playlist', title: 'Fun', composite: '/playlists/900/composite/1', leafCount: 1 }] } });
+  if (p === '/playlists/900/items') return json({ MediaContainer: { Metadata: [{ ratingKey: '7', type: 'track', title: 'A Song', index: 2 }] } });
+  if (p === '/library/metadata/7/nearest') return json({ MediaContainer: { Metadata: [{ ratingKey: '8', type: 'track', title: 'Close One', index: 1 }] } });
+  if (p === '/library/metadata/100/popularLeaves') return json({ MediaContainer: { Metadata: [{ ratingKey: '7', type: 'track', title: 'A Song', index: 2 }] } });
+  if (p === '/library/metadata/100/similar') return json({ MediaContainer: { Metadata: [{ ratingKey: '101', type: 'artist', title: 'Frida' }] } });
+  if (p === '/library/metadata/100/related') return json({ MediaContainer: { Hub: [] } });
+  if (p === '/library/metadata/200/children') return json({ MediaContainer: { Metadata: [6, 7, 8].map(n => ({ ratingKey: String(n), type: 'track', title: `Song ${n}`, index: n - 5, parentIndex: 1, duration: 200000 })) } });
+  if (p === '/music/:/transcode/universal/decision') return json({ MediaContainer: {} });
+  if (p === '/music/:/transcode/universal/start.m3u8') {
+    const session = url.searchParams.get('session');
+    return new Response(`#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=128000\nsession/${session}/base/index.m3u8\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
+  }
+  if (/^\/music\/:\/transcode\/universal\/session\/[^/]+\/base\/index\.m3u8$/.test(p)) {
+    return new Response('#EXTM3U\n#EXTINF:10.0,\n00000.ts\n#EXT-X-ENDLIST\n', { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
+  }
+  if (/^\/music\/:\/transcode\/universal\/session\/[^/]+\/base\/00000\.ts$/.test(p)) return new Response(new Uint8Array(188), { headers: { 'Content-Type': 'audio/mp2t' } });
+  if (p === '/music/:/transcode/universal/stop') return new Response('');
   if (p === '/video/:/transcode/universal/decision') return json({ MediaContainer: {} });
   if (p === '/video/:/transcode/universal/start.m3u8') {
     const session = url.searchParams.get('session');
@@ -146,6 +165,8 @@ test('browsing, playback, the media proxy and watch state go through the Plex so
   const thumb = await request(item.json.thumbnail, { cookie });
   assert.equal(thumb.status, 200);
   assert.equal(thumb.headers['content-type'], 'image/jpeg');
+  assert.equal(thumb.headers['cache-control'], 'private, max-age=86400', 'a picture is kept by the browser, not fetched again at every scroll');
+  assert.match(thumb.headers.vary, /\bCookie\b/, 'and only for the session that fetched it');
 
   const direct = await request('/api/playback/direct-capable', { cookie });
   assert.equal(typeof direct.json.capable, 'boolean');
@@ -188,6 +209,77 @@ test('browsing, playback, the media proxy and watch state go through the Plex so
   assert.equal(callsTo('/video/:/transcode/universal/stop').at(-1).url.searchParams.get('session'), sessionId);
 });
 
+test('a track plays through Plex\'s music transcoder, as audio only, and is stopped there', async () => {
+  const cookie = await signIn();
+  const started = await request('/api/start?key=7&quality=low&playbackId=music-play', { cookie });
+  assert.equal(started.status, 200, started.text);
+  const variant = started.text.split('\n').find(line => line.startsWith('/proxy/'));
+  assert.match(variant, /^\/proxy\/music\/:\/transcode\/universal\/session\/[\w-]+\/base\/index\.m3u8$/);
+  const sessionId = /session\/([\w-]+)\//.exec(variant)[1];
+
+  const decision = callsTo('/music/:/transcode/universal/decision').at(-1);
+  assert.equal(decision.url.searchParams.get('path'), '/library/metadata/7');
+  assert.equal(decision.url.searchParams.get('protocol'), 'hls');
+  assert.equal(decision.url.searchParams.get('musicBitrate'), '128', 'the low tier');
+  assert.equal(decision.url.searchParams.get('directPlay'), '0');
+  assert.match(decision.url.searchParams.get('X-Plex-Client-Profile-Extra'), /type=musicProfile&context=streaming&protocol=hls&container=mpegts&audioCodec=aac/);
+  assert.match(decision.url.searchParams.get('X-Plex-Client-Profile-Extra'), /name=audio\.samplingRate&list=48000/);
+  assert.equal(callsTo('/video/:/transcode/universal/decision').filter(call => call.url.searchParams.get('path') === '/library/metadata/7').length, 0, 'not the video transcoder');
+
+  const media = await request(variant, { cookie });
+  assert.equal(media.status, 200);
+  const segment = media.text.split('\n').find(line => line.startsWith('/proxy/'));
+  assert.match(segment, new RegExp(`music/:/transcode/universal/session/${sessionId}/base/00000\\.ts$`));
+  assert.equal((await request(segment, { cookie })).bytes, 188);
+  // Nobody else's session, and nothing outside the viewer's own music stream.
+  assert.equal((await request('/proxy/music/:/transcode/universal/session/someone-else/base/00000.ts', { cookie })).status, 403);
+  assert.equal((await request('/proxy/music/:/library/parts/1/file.flac', { cookie })).status, 403);
+
+  // The next track is the next one on the album; the last has none.
+  const after = await request('/api/library/next/7', { cookie });
+  assert.deepEqual(after.json.next, { ratingKey: '8', title: 'Song 8', season: 1, episode: 3 });
+  const details = (await request('/api/library/item/7', { cookie })).json;
+  assert.deepEqual([details.type, details.artist, details.album], ['track', 'An Artist', 'An Album']);
+
+  // Playlists, a playlist's tracks, and artists like an artist, through the routes the pages use.
+  assert.deepEqual((await request('/api/library/playlists', { cookie })).json.map(playlist => [playlist.type, playlist.title]), [['playlist', 'Fun']]);
+  assert.deepEqual((await request('/api/library/playlist/900/items', { cookie })).json.map(track => [track.type, track.episode]), [['track', 1]]);
+  assert.deepEqual((await request('/api/library/similar/100', { cookie })).json.sections.map(section => section.title), ['Similar Artists']);
+  assert.deepEqual((await request('/api/library/popular/100', { cookie })).json.map(track => [track.title, track.episode]), [['A Song', 1]]);
+  assert.deepEqual((await request('/api/library/similar-tracks/7', { cookie })).json.map(track => track.title), ['Close One']);
+  assert.equal((await request('/api/library/playlist/x/items', { cookie })).status, 400, 'ids are checked');
+
+  // Its lyrics: which sets there are, and one of them as lines with times.
+  assert.deepEqual((await request('/api/library/lyrics/7', { cookie })).json, { tracks: [{ id: '70', label: 'LyricFind', timed: true }] });
+  const lyric = await request('/api/library/lyric/7/70', { cookie });
+  assert.deepEqual(lyric.json, { timed: true, lines: [{ startMs: 2000, text: 'La la' }] });
+  assert.equal(lyric.headers['cache-control'], 'private, max-age=600');
+  assert.equal((await request('/api/library/lyric/7/71', { cookie })).status, 404, 'not one of this track\'s lyrics');
+  assert.equal((await request('/api/library/lyric/7/x', { cookie })).status, 400);
+
+  // Ending it stops the music transcode, not the video one.
+  const before = callsTo('/video/:/transcode/universal/stop').length;
+  assert.equal((await request('/api/auth/logout', { method: 'POST', cookie })).status, 200);
+  assert.equal(callsTo('/music/:/transcode/universal/stop').at(-1).url.searchParams.get('session'), sessionId);
+  assert.equal(callsTo('/video/:/transcode/universal/stop').length, before);
+});
+
+test('the browse page is isolated so it can hold the music player in a frame, and the player may be framed by this site only', async () => {
+  const cookie = await signIn();
+  for (const page of ['/browse', '/browse.html']) {
+    const browse = await request(page, { cookie });
+    assert.equal(browse.headers['cross-origin-opener-policy'], 'same-origin', page);
+    assert.equal(browse.headers['cross-origin-embedder-policy'], 'credentialless', `${page}: pictures from elsewhere still load, without cookies`);
+    assert.equal(browse.headers['x-frame-options'], 'DENY', `${page} itself is never framed`);
+    assert.match(browse.headers['content-security-policy'], /frame-ancestors 'none'/);
+  }
+  const player = await request('/canvas2', { cookie });
+  assert.equal(player.headers['cross-origin-embedder-policy'], 'require-corp');
+  assert.equal(player.headers['x-frame-options'], 'SAMEORIGIN');
+  assert.match(player.headers['content-security-policy'], /frame-ancestors 'self'/);
+  assert.equal((await request('/detail', { cookie })).headers['cross-origin-embedder-policy'], undefined, 'other pages are as they were');
+});
+
 test('limit plugins receive the source-derived account key', async () => {
   globalThis.__limitKeys.length = 0;
   const cookie = await signIn();
@@ -218,4 +310,11 @@ test('plugins find and name accounts through core, including by exact email', as
   assert.deepEqual(await accounts.describe('plex:1'), owner);
   assert.equal(await accounts.describe('jellyfin:elsewhere'), null);
   assert.equal(await accounts.describe('1'), null);
+});
+
+test('core counts music minutes apart from video: the media server says which, and the plugin hooks are told', () => {
+  const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  assert.match(server, /recordUsage\(key,seconds,detail\);\s+notify\(usageListeners,key,seconds,detail\);/);
+  assert.match(server, /kind = state\.active\?\.kind \?\? null;/);
+  assert.match(server, /if \(kind === 'music'\) watchTimeMeter\.setKind\(viewerFor\(req\), String\(req\.query\.playbackId \|\| 'legacy'\), 'music'\);/);
 });

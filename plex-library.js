@@ -3,12 +3,26 @@
 
 import { plexDeviceHeaders } from './plex-connection.js';
 import { describeTrack, orderTracks, toWebVtt, readSubtitleText, TEXT_FORMATS, TRACK_ID } from './subtitles.js';
+import { parseLyrics } from './lyrics.js';
 
 const THUMBNAIL_PRESETS = {
   landscape: { width: 600, height: 338 },
   poster: { width: 390, height: 585 },
   backdrop: { width: 1280, height: 720 },
+  // Music artwork is square, in the size it is shown: a track's row is 56 pixels, a card in a grid
+  // about 150-200, and the cover on the player's screen is large. Asking Plex for more than is
+  // shown makes it resize (and the viewer download) far more than needed.
+  tiny: { width: 128, height: 128 },
+  square: { width: 320, height: 320 },
+  cover: { width: 512, height: 512 },
 };
+
+// Music, as sources present it (see sources.js): an artist holds albums and an album holds
+// tracks, the way a show holds seasons and a season holds episodes.
+const MUSIC_TYPES = new Set(['artist', 'album', 'track']);
+// The pictures a page may ask for: an item's art, or a playlist's composite of its tracks' art.
+const THUMBNAIL_PATH = /^\/(?:library\/metadata\/\d+\/(?:thumb|art|banner)|playlists\/\d+\/composite)(?:\/\d+)?$/;
+const MUSIC_VIEWS = [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }];
 
 export function createPlexLibrary({ plexUrl, token, clientId, productName = 'FreeStuffCrazy Player' }) {
   // Without a client identifier, two different profiles' requests are
@@ -30,6 +44,10 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
     return res.json();
   }
 
+  // Plex can send an empty title for an item whose name it keeps only as the sort title (some albums); Plex's own
+  // apps show that name, so this does too.
+  const titleOf = (m) => m.title || m.titleSort || '';
+
   function thumbnailProxyUrl(path, preset = 'landscape') {
     if (!path) return null;
     const dimensions = THUMBNAIL_PRESETS[preset];
@@ -40,7 +58,7 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
   function thumbnailUpstreamUrl(path, width, height) {
     const plexBase = new URL(plexUrl);
     const source = new URL(path, plexBase);
-    if (source.origin !== plexBase.origin || source.search || !/^\/library\/metadata\/\d+\/(?:thumb|art|banner)(?:\/\d+)?$/.test(source.pathname)) throw new TypeError('Invalid Plex thumbnail path');
+    if (source.origin !== plexBase.origin || source.search || !THUMBNAIL_PATH.test(source.pathname)) throw new TypeError('Invalid Plex thumbnail path');
     const upstream = new URL('/photo/:/transcode', plexBase);
     upstream.searchParams.set('width', String(width));
     upstream.searchParams.set('height', String(height));
@@ -52,20 +70,38 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
 
   async function libraries() {
     const data = await plexApi('/library/sections');
-    return data.MediaContainer.Directory.map((d) => ({ id: d.key, title: d.title, type: d.type }));
+    // Plex calls a music library "artist"; sources call it "music".
+    return data.MediaContainer.Directory.map((d) => ({
+      id: d.key, title: d.title, type: d.type === 'artist' ? 'music' : d.type,
+      // Ways to list a library besides its default (the first): see "Music" in PLUGIN_DEVELOPMENT.md.
+      ...(d.type === 'artist' ? { views: MUSIC_VIEWS } : {}),
+    }));
   }
 
-  async function libraryItems(id, { sort = 'addedAt:desc', start = 0, size } = {}) {
-    const sizeParam = size ? `&X-Plex-Container-Start=${start}&X-Plex-Container-Size=${size}` : '';
-    const data = await plexApi(`/library/sections/${encodeURIComponent(id)}/all?sort=${encodeURIComponent(sort)}${sizeParam}`);
+  // A music library can be listed by artist, or straight to every album or every track.
+  // Plex asks for those with a numeric type (9 albums, 10 tracks) on the section's /all.
+  const VIEW_TYPES = { albums: 9, tracks: 10 };
+
+  async function libraryItems(id, { sort = 'addedAt:desc', start = 0, size, view } = {}) {
+    // Albums and tracks are left in Plex's own order (by artist, then album, then track), as Plex
+    // Web lists them; a sort by title would scatter an artist's albums through the alphabet.
+    const query = [
+      VIEW_TYPES[view] ? `type=${VIEW_TYPES[view]}` : `sort=${encodeURIComponent(sort)}`,
+      ...(size ? [`X-Plex-Container-Start=${start}`, `X-Plex-Container-Size=${size}`] : []),
+    ].join('&');
+    const data = await plexApi(`/library/sections/${encodeURIComponent(id)}/all?${query}`);
+    if (view === 'tracks') return { total: data.MediaContainer.totalSize, items: (data.MediaContainer.Metadata || []).map(mapEpisode) };
     const items = (data.MediaContainer.Metadata || []).map((m) => {
       const media = m.Media?.[0];
       return {
         ratingKey: m.ratingKey,
-        title: m.title,
+        title: titleOf(m),
+        // What the list is in the order of (an artist is under the surname: "Abbott, Gregory"), so the # A-Z bar
+        // can put each letter where that order has it.
+        sortTitle: m.titleSort || titleOf(m),
         year: m.year,
         type: m.type,
-        thumbnail: thumbnailProxyUrl(m.thumb, 'poster'),
+        thumbnail: thumbnailProxyUrl(m.thumb, MUSIC_TYPES.has(m.type) ? 'square' : 'poster'),
         duration: m.duration ? Math.round(m.duration / 60000) : null,
         durationMs: m.duration || null,
         viewOffset: m.viewOffset || 0,
@@ -75,6 +111,8 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
         childCount: m.childCount,
         leafCount: m.leafCount,
         viewedLeafCount: m.viewedLeafCount || 0,
+        // An album listed on its own still belongs to an artist, which it opens under.
+        ...(m.type === 'album' ? { showRatingKey: m.parentRatingKey, showTitle: m.parentTitle } : {}),
       };
     });
     return { total: data.MediaContainer.totalSize, items };
@@ -87,9 +125,27 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
 
   function mapEpisode(m) {
     const media = m.Media?.[0];
+    if (m.type === 'track') {
+      return {
+        ratingKey: m.ratingKey,
+        type: 'track',
+        title: titleOf(m),
+        // Track number, and the disc when the album has several.
+        episode: m.index,
+        season: m.parentIndex,
+        artist: m.originalTitle || m.grandparentTitle || null,
+        album: m.parentTitle || null,
+        duration: m.duration ? Math.round(m.duration / 60000) : null,
+        durationMs: m.duration || null,
+        viewOffset: m.viewOffset || 0,
+        // The album's art first, so every track of an album shares one picture, fetched once.
+        thumbnail: thumbnailProxyUrl(m.parentThumb || m.thumb || m.grandparentThumb, 'tiny'),
+        audioCodec: media?.audioCodec,
+      };
+    }
     return {
       ratingKey: m.ratingKey,
-      title: m.title,
+      title: titleOf(m),
       season: m.parentIndex,
       episode: m.index,
       duration: m.duration ? Math.round(m.duration / 60000) : null,
@@ -103,17 +159,37 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
   // A show's direct children are its seasons.
   async function showSeasons(id) {
     const data = await plexApi(`/library/metadata/${encodeURIComponent(id)}/children`);
-    return (data.MediaContainer.Metadata || []).map((m) => ({
+    const mapAlbum = (m, group = null) => ({
       ratingKey: m.ratingKey,
-      type: 'season',
-      title: m.title,
+      // An artist's children are albums.
+      type: m.type === 'album' ? 'album' : 'season',
+      title: titleOf(m),
       index: m.index,
+      year: m.year,
       showRatingKey: m.parentRatingKey,
       showTitle: m.parentTitle,
-      thumbnail: thumbnailProxyUrl(m.thumb, 'poster'),
+      thumbnail: thumbnailProxyUrl(m.thumb, m.type === 'album' ? 'square' : 'poster'),
       leafCount: m.leafCount,
       viewedLeafCount: m.viewedLeafCount || 0,
-    }));
+      ...(group ? { group } : {}),
+    });
+    const items = (data.MediaContainer.Metadata || []).map((m) => mapAlbum(m));
+    // Plex keeps an artist's compilations, singles and EPs, live albums, soundtracks, demos and remixes in sections of
+    // their own (the artist's "related" hubs) rather than among its children, so an artist with only those has no
+    // albums above. They are listed after the others; a failure to read them just leaves them out.
+    try {
+      const related = await plexApi(`/library/metadata/${encodeURIComponent(id)}/related?includeAugmentations=1&includeMeta=1`);
+      const seen = new Set(items.map((item) => String(item.ratingKey)));
+      for (const hub of related.MediaContainer?.Hub || []) {
+        if (!String(hub.hubIdentifier || '').startsWith('artist.albums.')) continue;
+        for (const m of hub.Metadata || []) {
+          if (m.type !== 'album' || seen.has(String(m.ratingKey))) continue;
+          seen.add(String(m.ratingKey));
+          items.push(mapAlbum(m, hub.title));
+        }
+      }
+    } catch { /* just the albums above */ }
+    return items;
   }
 
   // A season's direct children are its episodes.
@@ -132,7 +208,7 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
       ratingKey: m.ratingKey,
       type: m.type,
       librarySectionId: m.librarySectionID != null ? String(m.librarySectionID) : null,
-      title: m.title,
+      title: titleOf(m),
       showTitle: m.grandparentTitle || null,
       // Keep season and show references for next-up reconstruction.
       parentKey: m.parentKey || null,
@@ -147,8 +223,11 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
       duration: m.duration ? Math.round(m.duration / 60000) : null,
       durationMs: m.duration || null,
       viewOffset: m.viewOffset || 0,
-      thumbnail: thumbnailProxyUrl(m.thumb, 'poster'),
+      // A track's cover is its album's, large because the player shows it that way.
+      thumbnail: thumbnailProxyUrl(m.type === 'track' ? (m.parentThumb || m.thumb) : m.thumb, m.type === 'track' ? 'cover' : MUSIC_TYPES.has(m.type) ? 'square' : 'poster'),
       backdrop: thumbnailProxyUrl(m.art || m.thumb, 'backdrop'),
+      // Music: who and what a track is part of (an album's own artist is its showTitle).
+      ...(m.type === 'track' ? { artist: m.originalTitle || m.grandparentTitle || null, album: m.parentTitle || null } : {}),
       videoCodec: media?.videoCodec,
       resolution: media ? `${media.width}x${media.height}` : null,
     };
@@ -186,21 +265,127 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
     return toWebVtt(await readSubtitleText(res));
   }
 
+  // A track's lyrics. Plex keeps each set as a stream of type 4 on the track's file: one from a
+  // lyrics provider, which has times for each line, and maybe one embedded in the file.
+  async function lyricStreams(id) {
+    const data = await plexApi(`/library/metadata/${encodeURIComponent(id)}`);
+    const media = data.MediaContainer.Metadata?.[0]?.Media || [];
+    return media.flatMap(entry => (entry.Part || []).flatMap(part => part.Stream || []))
+      .filter(stream => stream.streamType === 4 && TRACK_ID.test(String(stream.id)));
+  }
+
+  const lyricsLabel = stream => {
+    const provider = String(stream.provider || '');
+    if (/lyricfind/i.test(provider)) return 'LyricFind';
+    if (/musixmatch/i.test(provider)) return 'Musixmatch';
+    return String(stream.displayTitle || stream.title || (provider ? 'Lyrics' : 'Embedded')).slice(0, 60);
+  };
+
+  async function lyricTracks(id) {
+    return (await lyricStreams(id)).map(stream => ({
+      id: String(stream.id),
+      label: lyricsLabel(stream),
+      // A set with times for its lines can follow the song.
+      timed: stream.timed === true || stream.timed === 1 || stream.timed === '1' || String(stream.format || '').toLowerCase() === 'lrc',
+    }));
+  }
+
+  // One set of lyrics as { timed, lines }. Only one of this track's own lyric streams can be asked for.
+  async function lyricText(id, trackId) {
+    const stream = (await lyricStreams(id)).find(candidate => String(candidate.id) === String(trackId));
+    if (!stream) return null;
+    const headers = { 'X-Plex-Token': token, ...plexDeviceHeaders(productName) };
+    if (clientId) headers['X-Plex-Client-Identifier'] = clientId;
+    // Plex Web asks for the XML form, which carries the timing of each line.
+    for (const query of ['?format=xml', '']) {
+      const res = await fetch(`${plexUrl}/library/streams/${encodeURIComponent(stream.id)}${query}`, { headers, redirect: 'error', signal: AbortSignal.timeout(10000) });
+      if (!res.ok) { await res.body?.cancel(); continue; }
+      return parseLyrics(await readSubtitleText(res));
+    }
+    throw new Error('Plex lyrics unavailable');
+  }
+
+  // Playlists of music, as a list of playlists and then the tracks of one. (Plex keeps playlists on the
+  // server, not in a library.)
+  async function playlists() {
+    const data = await plexApi('/playlists?playlistType=audio');
+    return (data.MediaContainer.Metadata || []).map((m) => ({
+      ratingKey: String(m.ratingKey),
+      type: 'playlist',
+      title: titleOf(m),
+      thumbnail: thumbnailProxyUrl(m.composite || m.thumb, 'square'),
+      leafCount: m.leafCount,
+      duration: m.duration ? Math.round(m.duration / 60000) : null,
+      durationMs: m.duration || null,
+    }));
+  }
+
+  async function playlistItems(id) {
+    const data = await plexApi(`/playlists/${encodeURIComponent(id)}/items`);
+    // A playlist's tracks are numbered by their place in it, not by their number on their album.
+    return (data.MediaContainer.Metadata || []).filter((m) => m.type === 'track').map((m, index) => ({ ...mapEpisode(m), episode: index + 1, season: null }));
+  }
+
+  // An artist's most played tracks, as Plex Web's "Popular Tracks": from the artist's own list of them,
+  // else from the artist's details when they carry it.
+  async function popularTracks(id) {
+    const asTracks = (list) => (Array.isArray(list) ? list : list?.Metadata || [])
+      .filter((m) => m && m.type === 'track' && /^\d+$/.test(String(m.ratingKey)))
+      .slice(0, 20).map((m, index) => ({ ...mapEpisode(m), episode: index + 1, season: null }));
+    const direct = await plexApi(`/library/metadata/${encodeURIComponent(id)}/popularLeaves`).then((data) => asTracks(data.MediaContainer.Metadata)).catch(() => []);
+    if (direct.length) return direct;
+    const details = await plexApi(`/library/metadata/${encodeURIComponent(id)}?includePopularLeaves=1`).catch(() => null);
+    return asTracks(details?.MediaContainer?.Metadata?.[0]?.PopularLeaves);
+  }
+
+  // Tracks that sound like this one (Plex's sonic analysis of the library), nearest first. Plex answers with
+  // nothing for a library it has not analysed, which is just no list.
+  async function similarTracks(id) {
+    const data = await plexApi(`/library/metadata/${encodeURIComponent(id)}/nearest?limit=40&maxDistance=0.25`).catch(() => null);
+    return (data?.MediaContainer?.Metadata || [])
+      .filter((m) => m && m.type === 'track' && /^\d+$/.test(String(m.ratingKey)) && String(m.ratingKey) !== String(id))
+      .slice(0, 40).map((m) => ({ ...mapEpisode(m), season: null }));
+  }
+
+  // Artists like this one: those Plex relates it to in the library, and those that sound like it.
+  async function similarArtists(id) {
+    const toArtist = (m) => ({ ratingKey: String(m.ratingKey), type: 'artist', title: titleOf(m), thumbnail: thumbnailProxyUrl(m.thumb, 'square'), leafCount: m.leafCount });
+    const usable = (m) => m && m.type === 'artist' && /^\d+$/.test(String(m.ratingKey)) && String(m.ratingKey) !== String(id);
+    const sections = [];
+    const [similar, related] = await Promise.all([
+      plexApi(`/library/metadata/${encodeURIComponent(id)}/similar?count=50`).catch(() => null),
+      plexApi(`/library/metadata/${encodeURIComponent(id)}/related`).catch(() => null),
+    ]);
+    const seen = new Set();
+    const add = (title, metadata) => {
+      const items = (metadata || []).filter(usable).filter((m) => !seen.has(String(m.ratingKey))).map(toArtist);
+      items.forEach((item) => seen.add(item.ratingKey));
+      if (items.length) sections.push({ title, items });
+    };
+    add('Similar Artists', similar?.MediaContainer?.Metadata);
+    // A hub of artists that sound alike (Plex's sonic analysis), under whatever name Plex gives it.
+    for (const hub of related?.MediaContainer?.Hub || []) {
+      if (/sonic/i.test(`${hub.hubIdentifier || ''} ${hub.title || ''}`)) add('Sonically Similar Artists', hub.Metadata);
+    }
+    return sections;
+  }
+
   // Normalize section hubs, including seasons mixed into Recently Added.
   function mapHubItem(m) {
     const isEpisode = m.type === 'episode';
-    const isSeason = m.type === 'season';
+    // A season of a show, or an album of an artist: both belong to something above them.
+    const isSeason = m.type === 'season' || m.type === 'album';
     return {
       ratingKey: m.ratingKey,
       type: m.type,
       librarySectionId: m.librarySectionID != null ? String(m.librarySectionID) : null,
-      title: m.title,
+      title: titleOf(m),
       year: m.year,
       season: isEpisode ? m.parentIndex : undefined,
       episode: isEpisode ? m.index : undefined,
       showTitle: isEpisode ? m.grandparentTitle : (isSeason ? m.parentTitle : undefined),
       showRatingKey: isSeason ? m.parentRatingKey : undefined,
-      thumbnail: thumbnailProxyUrl(m.thumb, isEpisode ? 'landscape' : 'poster'),
+      thumbnail: thumbnailProxyUrl(m.thumb, isEpisode ? 'landscape' : MUSIC_TYPES.has(m.type) ? 'square' : 'poster'),
       duration: m.duration ? Math.round(m.duration / 60000) : null,
       durationMs: m.duration || null,
       viewOffset: m.viewOffset || 0,
@@ -321,10 +506,10 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
       for (const m of hub.Metadata || []) {
         results.push({
           ratingKey: m.ratingKey,
-          title: m.title,
+          title: titleOf(m),
           year: m.year,
           type: m.type,
-          thumbnail: thumbnailProxyUrl(m.thumb, 'poster'),
+          thumbnail: thumbnailProxyUrl(m.thumb, MUSIC_TYPES.has(m.type) ? 'square' : 'poster'),
         });
       }
     }
@@ -332,7 +517,7 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
   }
 
   return {
-    subtitleTracks, subtitleText,
+    subtitleTracks, subtitleText, lyricTracks, lyricText, playlists, playlistItems, similarArtists, popularTracks, similarTracks,
     libraries, libraryItems, showEpisodes, showSeasons, seasonEpisodes, itemDetails, hubContinueWatching, recentlyAdded, search, thumbnailUpstreamUrl,
     accounts, historyForAccount, continueWatchingForAccount,
   };

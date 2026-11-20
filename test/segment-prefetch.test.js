@@ -158,9 +158,47 @@ test('a seek drops read-ahead outside the new window', async () => {
   await settle();
   const aborted = net.requests.filter(r => r.url === segmentUrl(1) || r.url === segmentUrl(2));
   await Promise.all(aborted.map(r => assert.rejects(r.promise, /Aborted/)));
-  assert.deepEqual(net.pending().filter(u => !aborted.some(r => r.url === u)), [segmentUrl(20), segmentUrl(21), segmentUrl(22)].sort());
+  assert.deepEqual(net.pending().filter(u => !aborted.some(r => r.url === u)), [segmentUrl(20)],
+    'only the segment asked for goes out while the media server catches up with the seek');
   net.release(segmentUrl(20));
   await seek;
+  await settle();
+  assert.deepEqual(net.pending().filter(u => !aborted.some(r => r.url === u)), [segmentUrl(21), segmentUrl(22)].sort(), 'read-ahead resumes once it has arrived');
+});
+
+test('a failed segment is asked for again, so a seek is not an error while the server catches up', async () => {
+  let calls = 0;
+  const fetchFn = (resource) => {
+    const url = typeof resource === 'string' ? resource : resource.url;
+    if (url.endsWith('index.m3u8')) return Promise.resolve(new Response(playlist(40), { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } }));
+    calls += 1;
+    return Promise.resolve(calls <= 2 ? new Response('nope', { status: 500 }) : new Response(new Uint8Array(10), { status: 200 }));
+  };
+  const prefetcher = new SegmentPrefetcher({ readAheadSeconds: 0, fetchFn, retryDelayMs: 1 });
+  await prefetcher.fetch(`${BASE}index.m3u8`);
+  const response = await prefetcher.fetch(segmentUrl(5));
+  assert.equal(response.status, 200);
+  assert.equal(calls, 3, 'two failures, then the segment');
+  prefetcher.dispose();
+});
+
+test('a segment that keeps failing is given up on, and not-found is not retried', async () => {
+  let calls = 0;
+  const failWith = (status) => (resource) => {
+    const url = typeof resource === 'string' ? resource : resource.url;
+    if (url.endsWith('index.m3u8')) return Promise.resolve(new Response(playlist(40), { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } }));
+    calls += 1;
+    return Promise.resolve(new Response('x', { status }));
+  };
+  const broken = new SegmentPrefetcher({ readAheadSeconds: 0, fetchFn: failWith(500), retryDelayMs: 1 });
+  await broken.fetch(`${BASE}index.m3u8`);
+  assert.equal((await broken.fetch(segmentUrl(5))).status, 500);
+  assert.equal(calls, 4, 'the first request and three more');
+  calls = 0;
+  const missing = new SegmentPrefetcher({ readAheadSeconds: 0, fetchFn: failWith(404), retryDelayMs: 1 });
+  await missing.fetch(`${BASE}index.m3u8`);
+  assert.equal((await missing.fetch(segmentUrl(5))).status, 404);
+  assert.equal(calls, 1);
 });
 
 test('a mid-segment resume, unknown URLs and failures go to the network', async () => {
@@ -188,4 +226,19 @@ test('a mid-segment resume, unknown URLs and failures go to the network', async 
   const fallback = await failing.fetch(segmentUrl(1));
   assert.equal(fallback.status, 503, 'the player sees the real response, not a cached failure');
   failing.dispose();
+});
+
+test('it says when everything to the end of the stream has been downloaded', async () => {
+  const { net, prefetcher } = await started(8 * 40);
+  assert.equal(prefetcher.hasAllAhead(), false, 'nothing is held before playback starts');
+  await serve(net, prefetcher, 36); // 37, 38 and 39 are the rest of a 40-segment stream
+  await settle();
+  assert.equal(prefetcher.hasAllAhead(), false, 'they are still being downloaded');
+  for (let round = 0; round < 6 && net.pending().length; round++) {
+    for (const url of net.pending()) net.release(url);
+    await settle();
+  }
+  assert.equal(prefetcher.hasAllAhead(), true, 'all of them are held');
+  prefetcher.dispose();
+  assert.equal(prefetcher.hasAllAhead(), false, 'and not once it has been let go');
 });

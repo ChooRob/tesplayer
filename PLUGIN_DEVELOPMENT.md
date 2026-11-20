@@ -18,7 +18,7 @@ export default {
   getAccountKey(session) { /* group a person across devices/sessions */ },
   getStartQualityCap(req) { /* 'low' to start this client at the lowest quality, else null */ },
   getQuotaStatus(accountKey) { /* { remainingSeconds, resetAt, breakdown?: [{ label, seconds }] } | null */ },
-  recordUsage(accountKey, secondsElapsed) { /* usage accounting */ },
+  recordUsage(accountKey, secondsElapsed, { kind }) { /* usage accounting; kind is 'music' or 'video' */ },
   getStreamLimit(accountKey) { /* max concurrent streams, or null for unlimited */ },
   sources: { 'my-server': { configure(env) {}, create(args) {} } }, // a new kind of media server; see "Writing a source"
   embyServers: { resolve(address) {}, fetch(url, init) {} }, // let users sign in to their own Emby server; see below
@@ -43,8 +43,9 @@ ignored):
 - `context.onSignIn(listener)` is called with `{ sourceType, userKey }` when
   someone signs in, once per sign-in and not on a profile switch. `userKey` is
   opaque, such as `plex:<account ID>` or `jellyfin:<server>:<user>`.
-- `context.onUsage(listener)` is called with `(accountKey, seconds)` each time
-  watch time is counted. Unlike `recordUsage`, any number of plugins can listen.
+- `context.onUsage(listener)` is called with `(accountKey, seconds, { kind })` each time
+  watch time is counted; `kind` is `'music'` for music and `'video'` for everything
+  else (movies, shows, live TV). Unlike `recordUsage`, any number of plugins can listen.
 - `context.activeStreams()` returns `[{ accountKey }]` for streams playing right
   now. Watch time is only counted when a plugin supplies account keys.
 
@@ -164,6 +165,31 @@ the pages read:
 - `stop(active)` ends the stream upstream, given the object you put in `state.active`.
 - `directCapable(req)` and `mediaOrigin(req)` let the browser fetch media straight
   from the server when it can; return `false` and `''` to always go through the proxy.
+
+### Music
+
+A source can offer music with the calls it already has, so the pages need nothing source-specific.
+Think of an artist as a show, an album as a season and a track as an episode:
+
+| Screen | Call | Item `type` |
+| --- | --- | --- |
+| Library list | `libraries()` returns `{ type: 'music' }` | |
+| Artists | `libraryItems(libraryId)` | `artist` (`leafCount`: tracks) |
+| Albums | `showSeasons(artistId)` | `album`, with `showRatingKey` and `showTitle` naming the artist, `year`, `leafCount` |
+| Tracks | `seasonEpisodes(albumId)` | `track`, with `episode` (track number), `season` (disc), `artist`, `album`, `durationMs` |
+
+**Listing a library more than one way.** A library entry may carry `views: [{ id, label }]`
+(a music library: `artists`, `albums`, `tracks`), the first being the default. The page shows them as a
+switch and calls `libraryItems(libraryId, { sort, view, start, size })`; return that view's items (for
+`albums`, `type: 'album'` items that carry `showRatingKey` and `showTitle` so they open under their artist;
+for `tracks`, track items) and `{ total }`. `start` and `size` page a long list (the page asks for 500 at
+a time and shows the first page at once); a source that cannot page may ignore them and answer with
+everything. The page also has a filter box over whatever is on screen, which needs nothing from a source.
+
+`itemDetails` works for all three (a track adds `artist` and `album`), recently added and search may
+return albums and artists, and artwork should be square (the pages crop to a square for these types).
+A track plays through `playback.start` like a video does, answering with an HLS playlist that has only
+an audio track; see `plex-library.js` for the shapes Plex produces.
 
 ### Checking your work
 

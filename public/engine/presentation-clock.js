@@ -52,6 +52,36 @@ export class PresentationClock {
     this.wallStartedAt = 0;
     this.wallElapsed = 0;
     this.running = false;
+    // Gapless music: the output frame where the next track begins, once its audio has been queued behind this one's.
+    this.chainFrame = null;
+    this.crossed = false;
+  }
+
+  // Time starts again from 0 at this frame of the output, which is where the next track's audio begins.
+  chainAt(frame) {
+    this.chainFrame = Number.isFinite(frame) && frame >= 0 ? frame : null;
+    this.crossed = false;
+  }
+
+  clearChain() {
+    this.chainFrame = null;
+    this.crossed = false;
+  }
+
+  // True once, when playback has crossed into the next track.
+  takeCrossing() {
+    this.applyChain();
+    const crossed = this.crossed;
+    this.crossed = false;
+    return crossed;
+  }
+
+  applyChain() {
+    if (this.chainFrame === null || !this.audioRing || this.sampleRate <= 0) return;
+    if (this.audioRing.consumedFrames < this.chainFrame) return;
+    this.baseMediaTime = -this.chainFrame / this.sampleRate;
+    this.chainFrame = null;
+    this.crossed = true;
   }
 
   useAudioRing(audioRing, sampleRate) {
@@ -68,6 +98,7 @@ export class PresentationClock {
   }
 
   reset(mediaTime) {
+    this.clearChain();
     this.baseMediaTime = mediaTime;
     this.wallElapsed = 0;
     this.wallStartedAt = performance.now();
@@ -88,6 +119,7 @@ export class PresentationClock {
   }
 
   get currentTime() {
+    this.applyChain();
     if (this.audioRing && this.sampleRate > 0) {
       return this.baseMediaTime + this.audioRing.consumedFrames / this.sampleRate;
     }

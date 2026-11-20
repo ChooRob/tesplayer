@@ -10,5 +10,14 @@ export function nextEpisodeAfter(episodes, currentId) {
   return { ratingKey: String(next.ratingKey), title: next.title ?? '', season: next.season ?? null, episode: next.episode ?? null };
 }
 
+// The track after this one on its album. Tracks keep their order; there are no specials to skip.
+export function nextTrackAfter(tracks, currentId) {
+  const list = Array.isArray(tracks) ? tracks : [];
+  const at = list.findIndex(track => String(track.ratingKey) === String(currentId));
+  const next = at >= 0 ? list[at + 1] : null;
+  if (!next) return null;
+  return { ratingKey: String(next.ratingKey), title: next.title ?? '', season: next.season ?? null, episode: next.episode ?? null };
+}
+
 // Plex gives a show's key as a path ("/library/metadata/123"); Jellyfin gives the id.
 export const showIdFromKey = key => (key ? String(key).split('/').filter(Boolean).pop() || null : null);

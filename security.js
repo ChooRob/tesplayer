@@ -35,15 +35,23 @@ export function createLoginTransactions({ now = Date.now, ttl = 600000, maximum 
   };
 }
 
+// Counts requests per address for `windowMs`. Every bucket lasts the same time, so the map's
+// insertion order is also its expiry order: old buckets are dropped from the front, and
+// work stops at the first one still in its window. When the map is full of live buckets the
+// oldest is dropped to make room instead of refusing new addresses, so filling it with
+// made-up addresses cannot lock everyone else out (it can only reset the oldest counts).
 export function rateLimit({ maximum, windowMs = 60000, now = Date.now, maxKeys = 10000 }) {
   const buckets = new Map();
   return (req, res, next) => {
     const time = now();
-    for (const [key, entry] of buckets) if (entry.until <= time) buckets.delete(key);
+    for (const [key, entry] of buckets) {
+      if (entry.until > time) break;
+      buckets.delete(key);
+    }
     const key = req.ip || req.socket?.remoteAddress || 'unknown';
     let entry = buckets.get(key);
     if (!entry) {
-      if (buckets.size >= maxKeys) return res.status(429).json({ error: 'Too many requests' });
+      if (buckets.size >= maxKeys) buckets.delete(buckets.keys().next().value);
       entry = { count: 0, until: time + windowMs }; buckets.set(key, entry);
     }
     if (++entry.count > maximum) {
@@ -131,9 +139,11 @@ export function directPlexOrigin(value) {
   } catch { return ''; }
 }
 
-function buildPolicy(hashes, origin = '') {
+// `frameAncestors` is who may put the page in a frame: nobody, except for the music player, which the browse
+// page (this site) holds in a frame so that music keeps playing while you browse.
+function buildPolicy(hashes, origin = '', frameAncestors = "'none'") {
   const external = origin ? ` ${origin}` : '';
-  return `default-src 'self'; script-src 'self' ${hashes.join(' ')}; style-src 'self' 'unsafe-inline'; img-src 'self' http: https: data:; media-src 'self' blob:${external}; connect-src 'self'${external}; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`;
+  return `default-src 'self'; script-src 'self' ${hashes.join(' ')}; style-src 'self' 'unsafe-inline'; img-src 'self' http: https: data:; media-src 'self' blob:${external}; connect-src 'self'${external}; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors ${frameAncestors}; form-action 'self'`;
 }
 
 export function securityHeaders(publicDir, { mediaOriginForRequest = () => '' } = {}) {
@@ -162,11 +172,11 @@ export function securityHeaders(publicDir, { mediaOriginForRequest = () => '' } 
       // whole page).
       try {
         const origin = name === 'canvas2' ? directPlexOrigin(mediaOriginForRequest(req)) : '';
-        policy = buildPolicy(scriptHashes(readFileSync(path.join(publicDir, `${name}.html`), 'utf8')), origin);
+        policy = buildPolicy(scriptHashes(readFileSync(path.join(publicDir, `${name}.html`), 'utf8')), origin, name === 'canvas2' ? "'self'" : "'none'");
         if (name === 'canvas2') res.set('Cache-Control', 'private, no-store');
       } catch { /* keep basePolicy */ }
     }
-    res.set({ 'Content-Security-Policy': policy, 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer' });
+    res.set({ 'Content-Security-Policy': policy, 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': name === 'canvas2' && pageNames.has(name) ? 'SAMEORIGIN' : 'DENY', 'Referrer-Policy': 'no-referrer' });
     if (req.secure) res.set('Strict-Transport-Security', 'max-age=31536000');
     if (req.path.startsWith('/api/') || req.path.startsWith('/proxy/')) res.set('Cache-Control', 'no-store');
     next();
@@ -187,6 +197,11 @@ export function sameOriginRequests(origin, extraMutatingPaths = new Set()) {
     if ((req.get('origin') && req.get('origin') !== expected)
       || ['cross-site', 'same-site'].includes(req.get('sec-fetch-site'))
       || (statefulPath && req.get('sec-fetch-mode') === 'navigate')) return res.status(403).json({ error: 'Cross-origin request denied' });
+    // A GET that does something (starts a transcode) can be triggered by a link on another
+    // site, and a browser sends a SameSite=Lax cookie with a top-level navigation. A browser
+    // that sends neither Origin nor Fetch Metadata gives no sign where the request came
+    // from, so those routes need an explicit same-origin one.
+    if (statefulPath && req.get('origin') !== expected && req.get('sec-fetch-site') !== 'same-origin') return res.status(403).json({ error: 'Cross-origin request denied' });
     next();
   };
 }
@@ -226,8 +241,33 @@ export async function fetchAvatar(value, fetcher = fetch) {
 
 export function mediaProxyPath(path, sessionId) {
   if (typeof path !== 'string' || /[%\\?#]/.test(path) || path.split('/').some(part => part === '.' || part === '..')) return false;
-  return !!sessionId && path.startsWith(`video/:/transcode/universal/session/${sessionId}/`)
+  // Video and music are transcoded by different Plex endpoints with the same layout.
+  return !!sessionId && (path.startsWith(`video/:/transcode/universal/session/${sessionId}/`) || path.startsWith(`music/:/transcode/universal/session/${sessionId}/`))
     && /^[\w/.:\-$]+$/.test(path);
+}
+
+// The text of a response, refusing more than `maxBytes`. The size is checked from the
+// Content-Length header first and again as the body arrives, because a server that is not
+// trusted (a user's own Jellyfin or Emby server) can send any amount, or lie about its size.
+export async function readBodyText(response, maxBytes) {
+  const tooLarge = () => Object.assign(new Error('The response from the media server is too large'), { code: 'RESPONSE_TOO_LARGE' });
+  const declared = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > maxBytes) { await response.body?.cancel().catch(() => {}); throw tooLarge(); }
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) { await reader.cancel().catch(() => {}); throw tooLarge(); }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally { reader.releaseLock?.(); }
+  return text + decoder.decode();
 }
 
 export function safeError(error) {

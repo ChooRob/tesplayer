@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { config } from './config.js';
 import { installationId, dataDir } from './private-storage.js';
 import { createRecentlyMarked } from './recently-marked.js';
-import { nextEpisodeAfter, showIdFromKey } from './next-episode.js';
+import { nextEpisodeAfter, nextTrackAfter, showIdFromKey } from './next-episode.js';
 import { openStore } from './storage.js';
 import { applyTrustProxy } from './trust-proxy.js';
 import { existsSync, readFileSync, writeFileSync, appendFileSync, statSync, unlinkSync } from 'node:fs';
@@ -57,6 +57,7 @@ const store = await openStore({ plugins, dataDir });
 // Setup problems (no backend, a malformed JELLYFIN_URL) don't stop the server:
 // the login page shows them so whoever runs it knows what to fix.
 const { configured, problems: setupProblems, warnings: setupWarnings } = checkSourceConfig(process.env, plugins);
+if (!config.auth.enabled) console.warn('Setup: auth.enabled is false, so anyone who can reach this server can browse and play from the media server it is set up with. Only run it this way on a network you trust, or behind another sign-in.');
 for (const problem of setupProblems) console.error(`Setup: ${problem}`);
 for (const warning of setupWarnings) console.warn(`Setup: ${warning}`);
 // Plugins may watch (never change) two things: a viewer signing in, and watch
@@ -143,14 +144,20 @@ const extraMutatingPaths = new Set(['/api/start', '/api/playback-speed']);
 app.use(sameOriginRequests(APP_ORIGIN, extraMutatingPaths));
 app.use(express.json({ limit: '16kb' }));
 app.use('/api/auth', rateLimit({ maximum: 300, windowMs: 600000 }));
-app.use(['/api/library', '/api/plex', '/proxy'], rateLimit({ maximum: 600, windowMs: 60000 }));
+app.use(['/api/library', '/api/plex', '/proxy'], rateLimit({ maximum: 1200, windowMs: 60000 }));
 app.use(['/api/start'], rateLimit({ maximum: 20, windowMs: 60000 }));
 
-// Enable isolation only on canvas2, where shared audio buffers require it.
+// Enable isolation where shared audio buffers need it: the player (canvas2), and the browse page, which holds
+// the music player in a frame so that music keeps playing while you browse (a frame is only isolated when the
+// page around it is). The browse page's own pictures need not be from this site, so it asks for isolation with
+// "credentialless": images from elsewhere still load, just without cookies.
 app.use((req, res, next) => {
   if (req.path === '/canvas2' || req.path === '/canvas2.html') {
     res.set('Cross-Origin-Opener-Policy', 'same-origin');
     res.set('Cross-Origin-Embedder-Policy', 'require-corp');
+  } else if (req.path === '/browse' || req.path === '/browse.html') {
+    res.set('Cross-Origin-Opener-Policy', 'same-origin');
+    res.set('Cross-Origin-Embedder-Policy', 'credentialless');
   }
   next();
 });
@@ -260,8 +267,15 @@ app.get('/api/auth/me', async (req, res) => {
   const profile = source.auth.getSessionProfileId(req);
   // A per-person, per-install key a plugin can use for browser-side history.
   const playbackScope = profile ? crypto.createHash('sha256').update(`${installId}:${accountKey || ''}:${profile}`).digest('hex').slice(0, 32) : null;
+  // Whose browser-side saved state this is (the music queue kept for reopening the app), so another account or profile
+  // signing in on the same browser never picks it up. One-way and per install, like playbackScope, and always set.
+  // The account and server come from the session itself, not from accountKey (which is null without a limit
+  // plugin): two servers of one type must never share a scope, even for the same user ID and name.
+  const stateAccount = source.auth.getSessionScopeKey?.(req) ?? await source.auth.getSessionAccountKey(req);
+  const stateServer = source.auth.getSessionMachineIdentifier?.(req) || '';
+  const stateScope = crypto.createHash('sha256').update(`${installId}:saved-state:${source.id}:${stateServer}:${stateAccount || ''}:${profile || ''}:${user.title || ''}`).digest('hex').slice(0, 32);
   res.json({ ...user, ...(server ? { server } : {}), source: { id: source.id, type: source.type, name: source.name }, profiles: typeof source.auth.listHomeUsersForSession === 'function',
-    quota, playbackScope, ...(shareableAccountId(accountKey) ? { accountId: shareableAccountId(accountKey) } : {}), accountStreamInUse: await watchTimeMeter.atStreamLimit(viewerFor(req), accountKey), adminAvailable: await admin.available(req) });
+    quota, playbackScope, stateScope, ...(shareableAccountId(accountKey) ? { accountId: shareableAccountId(accountKey) } : {}), accountStreamInUse: await watchTimeMeter.atStreamLimit(viewerFor(req), accountKey), adminAvailable: await admin.available(req) });
   } catch (err) { res.status(502).json({ error: safeError(err) }); }
 });
 
@@ -316,9 +330,9 @@ async function exceededQuota(accountKey) {
 const liveResponses = new Map();
 const watchTimeMeter = createWatchTimeMeter({
   maximum: config.auth.maxSessions,
-  recordUsage: async (key,seconds) => {
-    await firstPluginWith(plugins,'recordUsage')?.recordUsage(key,seconds);
-    notify(usageListeners,key,seconds);
+  recordUsage: async (key,seconds,detail) => {
+    await firstPluginWith(plugins,'recordUsage')?.recordUsage(key,seconds,detail);
+    notify(usageListeners,key,seconds,detail);
   },
   getQuotaStatus: key => firstPluginWith(plugins,'getQuotaStatus')?.getQuotaStatus(key),
   getStreamLimit: key => firstPluginWith(plugins,'getStreamLimit')?.getStreamLimit(key),
@@ -439,6 +453,12 @@ app.post('/api/playback/canvas-health', rateLimit({ maximum: 12, windowMs: 60000
     if (!QUALITY_LEVELS.includes(body.quality)) return res.status(400).end();
     metrics.quality = body.quality;
   }
+  // Which kind of browser reported it (Chrome's major version, and Tesla's browser by name), so the reports of
+  // one car can be picked out; for non-production diagnostics only, and nothing more of the user agent is kept.
+  if (PLAYBACK_DIAGNOSTICS) {
+    const agent = String(req.get('user-agent') || '');
+    metrics.browser = `${/Tesla/i.test(agent) ? 'tesla ' : ''}chrome ${agent.match(/Chrome\/(\d+)/)?.[1] || '?'}`;
+  }
   const line = JSON.stringify({ at: new Date().toISOString(), playbackId: body.playbackId, state: body.state,
     live: body.live === true, ...metrics });
   // In production only the reports that matter are kept: every failure on the
@@ -471,12 +491,22 @@ app.get('/api/start', async (req, res) => {
   const itemId = req.query.key || ITEM_KEY;
   if (!source.isValidId(itemId)) return res.status(400).json({ error: 'Valid item key required' });
   try {
+    const t0 = performance.now();
     await beginWatchTime(req);
+    const tMeter = performance.now();
+    let kind = null;
+    let tStopped = 0;
     await playbackSessions.run(viewerFor(req), async state => {
       await stopState(state);
+      tStopped = performance.now();
       try { await source.playback.start(req, res, { itemId, state, stopState }); }
       catch (error) { await stopState(state); throw error; }
+      kind = state.active?.kind ?? null;
     });
+    // Where the time of a start goes, outside production: the previous stream's stop is waited for before the new one begins.
+    if (PLAYBACK_DIAGNOSTICS) console.info('[start-timing]', JSON.stringify({ item: String(itemId), meterMs: Math.round(tMeter - t0), stopPreviousMs: Math.round(tStopped - tMeter), startMs: Math.round(performance.now() - tStopped) }));
+    // The media server says whether this was music; its minutes are counted apart from video.
+    if (kind === 'music') watchTimeMeter.setKind(viewerFor(req), String(req.query.playbackId || 'legacy'), 'music');
   } catch (err) { res.status(err.code ? 403 : 503).json({ error: err.code === 'ACCOUNT_STREAM_LIMIT' ? 'Account stream limit reached' : safeError(err), code: err.code, resetAt: err.resetAt }); }
 });
 
@@ -544,7 +574,16 @@ const libraryRoute = (read) => async (req, res) => {
   }
 };
 library.get('/libraries', libraryRoute(lib => lib.libraries()));
-library.get('/library/:id', libraryRoute((lib, req) => lib.libraryItems(req.params.id, { sort: req.query.sort })));
+// A library can be listed in more than one way (`view`, one of the library's own `views`) and in
+// pages (`start` and `size`); a source that cannot page just answers with everything.
+const LIST_VIEW = /^[a-z0-9-]{1,32}$/;
+const whole = (value, max) => { const number = Number(value); return Number.isInteger(number) && number >= 0 && number <= max ? number : undefined; };
+library.get('/library/:id', libraryRoute((lib, req) => lib.libraryItems(req.params.id, {
+  sort: req.query.sort,
+  view: typeof req.query.view === 'string' && LIST_VIEW.test(req.query.view) ? req.query.view : undefined,
+  start: whole(req.query.start, 1_000_000),
+  size: whole(req.query.size, 1000) || undefined,
+})));
 library.get('/library/:id/recentlyadded', libraryRoute((lib, req) => lib.recentlyAdded(req.params.id)));
 library.get('/show/:id/episodes', libraryRoute((lib, req) => lib.showEpisodes(req.params.id)));
 library.get('/show/:id/seasons', libraryRoute((lib, req) => lib.showSeasons(req.params.id)));
@@ -565,6 +604,26 @@ library.get('/subtitle/:id/:track', async (req, res) => {
     res.status(502).json({ error: safeError(err) });
   }
 });
+// Playlists of music, a playlist's tracks, and artists like an artist: none for a backend without them.
+library.get('/playlists', libraryRoute(async (lib) => (typeof lib.playlists === 'function' ? lib.playlists() : [])));
+library.get('/playlist/:id/items', libraryRoute(async (lib, req) => (typeof lib.playlistItems === 'function' ? lib.playlistItems(req.params.id) : [])));
+library.get('/similar-tracks/:id', libraryRoute(async (lib, req) => (typeof lib.similarTracks === 'function' ? lib.similarTracks(req.params.id) : [])));
+library.get('/popular/:id', libraryRoute(async (lib, req) => (typeof lib.popularTracks === 'function' ? lib.popularTracks(req.params.id) : [])));
+library.get('/similar/:id', libraryRoute(async (lib, req) => ({ sections: typeof lib.similarArtists === 'function' ? await lib.similarArtists(req.params.id) : [] })));
+// Lyrics: the sets a track has, and one of them as { timed, lines }. A backend without lyrics lists none.
+library.get('/lyrics/:id', libraryRoute(async (lib, req) => ({ tracks: typeof lib.lyricTracks === 'function' ? await lib.lyricTracks(req.params.id) : [] })));
+library.get('/lyric/:id/:track', async (req, res) => {
+  if (!TRACK_ID.test(req.params.track)) return res.status(400).json({ error: 'Invalid lyrics' });
+  try {
+    const lib = sourceFor(req).library(req);
+    const lyrics = typeof lib.lyricText === 'function' ? await lib.lyricText(req.params.id, req.params.track) : null;
+    if (!lyrics) return res.status(404).json({ error: 'No such lyrics' });
+    res.set('Cache-Control', 'private, max-age=600');
+    res.json(lyrics);
+  } catch (err) {
+    res.status(502).json({ error: safeError(err) });
+  }
+});
 library.get('/ondeck', libraryRoute(lib => lib.continueWatching()));
 // The episode after this one, and how far in the item counts as watched -- the
 // player offers Play Next from that point and moves on by itself at the end.
@@ -572,6 +631,12 @@ library.get('/next/:id', libraryRoute(async (lib, req) => {
   const source = sourceFor(req);
   const watchedAt = source.watchState.watchedFraction?.(req) ?? 0.9;
   const details = await lib.itemDetails(req.params.id);
+  // A track is followed by the next track of its album.
+  if (details.type === 'track') {
+    const albumId = showIdFromKey(details.parentKey);
+    if (!albumId || !source.isValidId(albumId)) return { next: null, watchedAt };
+    return { next: nextTrackAfter(await lib.seasonEpisodes(albumId), req.params.id), watchedAt };
+  }
   const showId = details.type === 'episode' ? showIdFromKey(details.grandparentKey) : null;
   if (!showId || !source.isValidId(showId)) return { next: null, watchedAt };
   return { next: nextEpisodeAfter(await lib.showEpisodes(showId), req.params.id), watchedAt };

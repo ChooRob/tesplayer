@@ -50,3 +50,8 @@ test('only digits are track IDs', () => {
   for (const good of ['0', '12', '999999']) assert.ok(TRACK_ID.test(good), good);
   for (const bad of ['', '1a', '-1', '1.5', '1234567', '../1', '1\n', ' 1']) assert.ok(!TRACK_ID.test(bad), JSON.stringify(bad));
 });
+
+test('WebVTT cues without an hours field are kept', () => {
+  assert.equal(toWebVtt('WEBVTT\n\n01:23.456 --> 01:25.000\nShort form\n\n00:00:02.000 --> 00:00:03.000\nLong form\n'),
+    'WEBVTT\n\n00:01:23.456 --> 00:01:25.000\nShort form\n\n00:00:02.000 --> 00:00:03.000\nLong form\n');
+});

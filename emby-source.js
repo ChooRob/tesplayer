@@ -7,7 +7,7 @@
 
 import crypto from 'node:crypto';
 import { QUALITY_TIERS, QUALITY_LEVELS, normalizeQuality, qualityTiers } from './public/engine/quality-tiers.js';
-import { parseCookies, safeError } from './security.js';
+import { parseCookies, safeError, readBodyText } from './security.js';
 import { createCookieSealer, packSession, unpackSession, SESSION_COOKIE_NAME } from './session-cookie.js';
 import { adminSpec, adminConfigured } from './admin-auth.js';
 import { serverPrompt } from './jellyfin-source.js';
@@ -17,6 +17,11 @@ const LOGIN_COOKIE_NAME = 'freeStuffCrazyPlayerEmbyLogin';
 const LOGIN_TTL_MS = 10 * 60 * 1000;
 const RENEW_AFTER_MS = 24 * 60 * 60 * 1000;
 const TICKS_PER_MS = 10_000;
+// The most read from a media server's reply: a sign-in step (anyone can start one, and the
+// server may be one a visitor typed), a library answer, and a playlist.
+const SIGN_IN_JSON_LIMIT = 256 * 1024;
+const API_JSON_LIMIT = 32 * 1024 * 1024;
+const PLAYLIST_LIMIT = 4 * 1024 * 1024;
 const AUDIO_BITRATE = 128_000;
 const ITEM_ID = /^\d{1,12}$/;
 const HEX_ID = /^[0-9a-f]{32}$/;
@@ -128,7 +133,9 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
       throw error;
     }
     if (response.status === 204) return null;
-    const text = await response.text();
+    // Without a credential this is a sign-in step, open to anyone and possibly aimed at a
+    // server the visitor typed, so it gets a small limit; the answers are a few kilobytes.
+    const text = await readBodyText(response, options?.credential ? API_JSON_LIMIT : SIGN_IN_JSON_LIMIT);
     return text ? JSON.parse(text) : null;
   }
 
@@ -377,7 +384,9 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
       }
       try {
         // The server chosen in step one, or the configured one.
-        const pending = pendingSignIn(req) ?? (HOME ? { state: { deviceId: crypto.randomUUID() }, server: HOME, info: await serverInfo() } : null);
+        // Without a cookie for the server chosen in step one, only an install that has no way to reach other servers
+        // may assume its own: a user's password must never go to a server they did not choose.
+        const pending = pendingSignIn(req) ?? (HOME && !tenantServers ? { state: { deviceId: crypto.randomUUID() }, server: HOME, info: await serverInfo() } : null);
         if (!pending) return res.status(400).json({ error: 'Sign-in expired; start again.' });
         const { state, server, info } = pending;
         const result = await api('/Users/AuthenticateByName', { server, method: 'POST', deviceId: state.deviceId, body: { Username: username.trim(), Pw: password } });
@@ -627,6 +636,9 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
       res.status(200);
       res.set('Content-Type', type);
       res.set('Cache-Control', 'private, max-age=3600');
+      // The address does not say whose picture it is, so the browser keeps one copy per session cookie: signing in as
+      // someone else in the same browser asks again instead of being handed the last person's.
+      res.vary('Cookie');
       if (upstream.body) pipeUpstream(upstream, res);
       else res.end();
     } catch {
@@ -763,7 +775,7 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
       return;
     }
     res.set('Content-Type', 'application/vnd.apple.mpegurl');
-    res.send(rewritePlaylist(await upstream.text(), master, playSessionId, server));
+    res.send(rewritePlaylist(await readBodyText(upstream, PLAYLIST_LIMIT), master, playSessionId, server));
   }
 
   async function proxyMedia(req, res, { ownsSession }) {
@@ -788,7 +800,7 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
       if (!/^(video\/|audio\/|application\/(?:vnd\.apple\.mpegurl|x-mpegurl|octet-stream))/.test(contentType)) { await upstream.body?.cancel(); return res.status(502).end(); }
       if (contentType.includes('mpegurl')) {
         res.set('Content-Type', contentType);
-        res.send(rewritePlaylist(await upstream.text(), new URL(upstreamUrl), playSessionId, server));
+        res.send(rewritePlaylist(await readBodyText(upstream, PLAYLIST_LIMIT), new URL(upstreamUrl), playSessionId, server));
         return;
       }
       res.status(200);

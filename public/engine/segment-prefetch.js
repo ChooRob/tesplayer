@@ -11,6 +11,14 @@ const DEFAULT_MAX_BYTES = 12 * 1024 * 1024;
 // restarting it would throw away what already arrived.
 const DEFAULT_STALL_TIMEOUT_MS = 30000;
 const RETRY_PAUSE_MS = 2000;
+// A segment the player needs is asked for again when the server fails it. After a seek the media server
+// may still be restarting its transcode, which can outlast the server's own wait and return an error
+// for a segment that is fine a moment later.
+const SEGMENT_RETRIES = 3;
+const SEGMENT_RETRY_DELAY_MS = 1000;
+// A jump of more than this many segments forward (or back past BACK) is a seek.
+const SEEK_FORWARD_SEGMENTS = 3;
+const SEEK_BACK_SEGMENTS = 4;
 
 const toUrl = (resource) => new URL(
   typeof resource === 'string' ? resource : resource instanceof URL ? resource.href : resource.url,
@@ -42,7 +50,7 @@ export function parseMediaPlaylist(text, baseUrl) {
 }
 
 export class SegmentPrefetcher {
-  constructor({ readAheadSeconds, maxBytes = DEFAULT_MAX_BYTES, parallelism = 2, stallTimeoutMs = DEFAULT_STALL_TIMEOUT_MS, fetchFn = (...args) => fetch(...args), now = () => Date.now() }) {
+  constructor({ readAheadSeconds, maxBytes = DEFAULT_MAX_BYTES, parallelism = 2, stallTimeoutMs = DEFAULT_STALL_TIMEOUT_MS, retryDelayMs = SEGMENT_RETRY_DELAY_MS, fetchFn = (...args) => fetch(...args), now = () => Date.now() }) {
     this.readAheadSeconds = readAheadSeconds;
     this.maxBytes = maxBytes;
     this.stallTimeoutMs = stallTimeoutMs;
@@ -52,6 +60,7 @@ export class SegmentPrefetcher {
     this.active = false;
     // Two requests in flight hide a long round trip between segments.
     this.parallelism = parallelism;
+    this.retryDelayMs = retryDelayMs;
     this.fetchFn = fetchFn;
     this.now = now;
     this.segments = [];
@@ -60,6 +69,9 @@ export class SegmentPrefetcher {
     this.position = -1; // furthest segment the player has asked for
     this.bytes = 0;
     this.pausedUntil = 0;
+    // After a seek, nothing but the segment the player asked for is requested until it arrives, so the
+    // media server (restarting its transcode) is not flooded with segments it cannot make yet.
+    this.holdFor = null;
     this.disposed = false;
     this.fetch = this.fetch.bind(this);
   }
@@ -76,20 +88,40 @@ export class SegmentPrefetcher {
     }
 
     this.demand(index);
-    const entry = this.entries.get(index);
-    // Serve whole segments only; a resumed read mid-segment goes to the network.
-    if (entry && rangeStart(init) === 0) {
-      this.entries.delete(index);
-      try {
-        const { buffer, contentType } = await entry.promise;
-        this.bytes -= entry.bytes;
-        this.fill();
-        return new Response(buffer, { status: 200, headers: { 'Content-Type': contentType, 'Content-Length': String(buffer.byteLength) } });
-      } catch {
-        // Fall through to a normal request if the read-ahead copy failed.
+    try {
+      const entry = this.entries.get(index);
+      // Serve whole segments only; a resumed read mid-segment goes to the network.
+      if (entry && rangeStart(init) === 0) {
+        this.entries.delete(index);
+        try {
+          const { buffer, contentType } = await entry.promise;
+          this.bytes -= entry.bytes;
+          this.fill();
+          return new Response(buffer, { status: 200, headers: { 'Content-Type': contentType, 'Content-Length': String(buffer.byteLength) } });
+        } catch {
+          // Fall through to a normal request if the read-ahead copy failed.
+        }
       }
+      return await this.fetchSegment(resource, init);
+    } finally {
+      if (this.holdFor === index) { this.holdFor = null; this.fill(); }
     }
-    return this.fetchFn(resource, init);
+  }
+
+  // The player's own request for a segment, tried again a few times if the server fails it.
+  async fetchSegment(resource, init) {
+    for (let attempt = 0; ; attempt++) {
+      let response = null;
+      try {
+        response = await this.fetchFn(resource, init);
+      } catch (error) {
+        if (attempt >= SEGMENT_RETRIES || init?.signal?.aborted || this.disposed) throw error;
+      }
+      if (response && (response.status < 500 || attempt >= SEGMENT_RETRIES || this.disposed)) return response;
+      await response?.body?.cancel().catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, this.retryDelayMs * (attempt + 1)));
+      if (init?.signal?.aborted) throw init.signal.reason ?? new DOMException('Aborted', 'AbortError');
+    }
   }
 
   async learnPlaylist(response, url) {
@@ -114,13 +146,25 @@ export class SegmentPrefetcher {
   // Audio and video read the same segments a little apart, so only a jump
   // forward or a large jump back (a seek) moves the read-ahead window.
   demand(index) {
-    if (index > this.position || index < this.position - 4) {
+    if (index > this.position || index < this.position - SEEK_BACK_SEGMENTS) {
+      if (this.position >= 0 && (index > this.position + SEEK_FORWARD_SEGMENTS || index < this.position - SEEK_BACK_SEGMENTS)) this.holdFor = index;
       this.position = index;
       for (const [cached, entry] of this.entries) {
         if (cached !== index && (cached < index || !this.inWindow(cached))) this.drop(cached, entry);
       }
     }
     this.fill();
+  }
+
+  // True once every segment after the one being played, to the end of the stream, has been downloaded and is
+  // held here. The rest of the stream can then be played with the media server no longer being asked for it.
+  hasAllAhead() {
+    if (this.disposed || !this.active || this.position < 0 || !this.segments.length) return false;
+    for (let index = this.position + 1; index < this.segments.length; index++) {
+      const entry = this.entries.get(index);
+      if (!entry || !entry.done || entry.bytes === 0) return false;
+    }
+    return true;
   }
 
   inWindow(index) {
@@ -137,7 +181,7 @@ export class SegmentPrefetcher {
   }
 
   fill() {
-    if (this.disposed || !this.active || this.position < 0 || this.now() < this.pausedUntil) return;
+    if (this.disposed || !this.active || this.position < 0 || this.holdFor !== null || this.now() < this.pausedUntil) return;
     let inFlight = 0;
     for (const entry of this.entries.values()) if (!entry.done) inFlight += 1;
     for (let index = this.position + 1; inFlight < this.parallelism && this.inWindow(index); index++) {
