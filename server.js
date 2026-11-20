@@ -21,6 +21,7 @@ import { checkSourceConfig, createSources } from './sources.js';
 import { createAccountDirectory } from './accounts.js';
 import { TRACK_ID } from './subtitles.js';
 import { createPublicAccountIds } from './account-ids.js';
+import { safeReturnPath } from './public/safe-navigation.js';
 
 const ITEM_KEY = process.env.ITEM_KEY;
 const PORT = process.env.PORT || 3000;
@@ -76,6 +77,7 @@ const sessionSourceFor = req => sourceList.find(source => source.auth.getSession
 const recentlyMarked = createRecentlyMarked();
 const sourceFor = req => sessionSourceFor(req) || defaultSource;
 // Pages and endpoints anyone may load, signed in or not.
+const SIGN_IN_PAGES = new Set(['/login', '/login.html']);
 const PUBLIC_PATHS = new Set(['/login', '/login.html', '/safe-navigation.js', '/icons.js', '/favicon.svg', '/api/auth/sources', '/api/auth/setup']);
 // Plugins may list pages and APIs of their own that work without signing in
 // (`publicPaths`, exact paths). They must not expose anything account-specific.
@@ -177,6 +179,11 @@ if (!sourceList.length) {
 app.use((req, res, next) => {
   if (!config.auth.enabled) return next();
   const source = sessionSourceFor(req);
+  // Someone still signed in who lands on the sign-in page (a bookmark, or a car's
+  // browser reopening it after sleeping) goes on to where they were headed.
+  if (source && req.method === 'GET' && SIGN_IN_PAGES.has(req.path)) {
+    return res.redirect(safeReturnPath(typeof req.query.return === 'string' ? req.query.return : null, 'http://player.invalid'));
+  }
   if (source) return source.auth.requireAuth(req, res, next);
   if (isPublicPath(req.path)) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Not authenticated' });
