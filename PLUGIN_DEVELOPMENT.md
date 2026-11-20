@@ -141,6 +141,8 @@ the pages read:
 - An item has `ratingKey` (your ID, as a string), `type` (`movie`, `show`, `season`,
   `episode`), `title`, `thumbnail` (a `/api/library/thumb?...` URL), `durationMs`,
   `viewOffset` (resume point in ms), and for shows `leafCount` and `viewedLeafCount`.
+  Episodes also have `viewCount` (times watched, 0 when unwatched), which Play on a
+  show or season uses to start after the last watched episode.
 - Optional: `subtitleTracks(itemId)` and `subtitleText(itemId, trackId)`; see
   `subtitles.js` for the track format. Without them there are no captions.
 - To fail with something a viewer should read, throw an Error with a `userMessage`

@@ -77,6 +77,10 @@ globalThis.fetch = async (value, options = {}) => {
   }
   if (/^\/music\/:\/transcode\/universal\/session\/[^/]+\/base\/00000\.ts$/.test(p)) return new Response(new Uint8Array(188), { headers: { 'Content-Type': 'audio/mp2t' } });
   if (p === '/music/:/transcode/universal/stop') return new Response('');
+  if (p === '/library/metadata/300/children') return json({ MediaContainer: { Metadata: [
+    { ratingKey: '8', title: 'Pilot', parentIndex: 1, index: 1, viewCount: 2 },
+    { ratingKey: '9', title: 'Second', parentIndex: 1, index: 2 },
+  ] } });
   if (p === '/video/:/transcode/universal/decision') return json({ MediaContainer: {} });
   if (p === '/video/:/transcode/universal/start.m3u8') {
     const session = url.searchParams.get('session');
@@ -170,6 +174,10 @@ test('browsing, playback, the media proxy and watch state go through the Plex so
   assert.equal(thumb.headers['content-type'], 'image/jpeg');
   assert.equal(thumb.headers['cache-control'], 'private, max-age=86400', 'a picture is kept by the browser, not fetched again at every scroll');
   assert.match(thumb.headers.vary, /\bCookie\b/, 'and only for the session that fetched it');
+
+  const episodes = await request('/api/library/season/300/episodes', { cookie });
+  assert.deepEqual(episodes.json.map(episode => [episode.ratingKey, episode.viewCount]), [['8', 2], ['9', 0]],
+    'Play on a season starts after the last watched episode');
 
   const direct = await request('/api/playback/direct-capable', { cookie });
   assert.equal(typeof direct.json.capable, 'boolean');

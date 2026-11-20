@@ -21,6 +21,7 @@ const SHOWS = 'd'.repeat(32);
 const MOVIE = 'e'.repeat(32);
 const EPISODE = 'f'.repeat(32);
 const PLAY = '1'.repeat(32);
+const SERIES = '2'.repeat(32);
 const DASHED = `${MOVIE.slice(0, 8)}-${MOVIE.slice(8, 12)}-${MOVIE.slice(12, 16)}-${MOVIE.slice(16, 20)}-${MOVIE.slice(20)}`;
 const pluginPath = path.join(temporary, 'limits-plugin.js');
 writeFileSync(pluginPath, `
@@ -90,6 +91,10 @@ globalThis.fetch = async (value, options = {}) => {
   if (p === `/Videos/${MOVIE}/${MOVIE}/Subtitles/2/0/Stream.vtt`) return new Response('WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n', { headers: { 'Content-Type': 'text/vtt' } });
   if (p === `/Items/${MOVIE}/Images/Primary`) return new Response(new Uint8Array(20), { headers: { 'Content-Type': 'image/jpeg' } });
   if (p === '/UserItems/Resume') return json({ Items: url.searchParams.get('ParentId') === LIB ? [movie] : [] });
+  if (p === `/Shows/${SERIES}/Episodes`) return json({ Items: [
+    { ...episode, Id: '3'.repeat(32), UserData: { Played: true, PlayCount: 0 } },
+    { ...episode, Id: '4'.repeat(32), UserData: { Played: false, PlayCount: 3 } },
+  ] });
   if (p === '/Shows/NextUp') return json({ Items: [episode] });
   if (p === `/Items/${MOVIE}/PlaybackInfo`) return json({ PlaySessionId: PLAY, MediaSources: [{ Id: MOVIE,
     TranscodingUrl: `/videos/${DASHED}/master.m3u8?DeviceId=x&MediaSourceId=${MOVIE}&PlaySessionId=${PLAY}&ApiKey=jf-token&SubtitleStreamIndex=3&SubtitleMethod=Encode&AudioBitrate=384000&VideoBitrate=616000` }] });
@@ -231,6 +236,10 @@ test('browsing returns the same shapes the pages already use for Plex', async ()
   const continueWatching = (await request('/api/library/ondeck', { cookie })).json;
   assert.deepEqual(continueWatching.map(item => [item.ratingKey, item.librarySectionId]), [[MOVIE, LIB], [EPISODE, SHOWS]]);
   assert.equal(continueWatching[1].showTitle, 'Show');
+
+  // Played is what marking watched sets; a play count left after marking unwatched does not count.
+  const episodes = (await request(`/api/library/show/${SERIES}/episodes`, { cookie })).json;
+  assert.deepEqual(episodes.map(episode => episode.viewCount), [1, 0]);
 });
 
 test('playback goes through the proxy with the token kept on the server', async () => {
