@@ -514,7 +514,7 @@ app.get('/api/start', async (req, res) => {
     if (PLAYBACK_DIAGNOSTICS) console.info('[start-timing]', JSON.stringify({ item: String(itemId), meterMs: Math.round(tMeter - t0), stopPreviousMs: Math.round(tStopped - tMeter), startMs: Math.round(performance.now() - tStopped) }));
     // The media server says whether this was music; its minutes are counted apart from video.
     if (kind === 'music') watchTimeMeter.setKind(viewerFor(req), String(req.query.playbackId || 'legacy'), 'music');
-  } catch (err) { res.status(err.code ? 403 : 503).json({ error: err.code === 'ACCOUNT_STREAM_LIMIT' ? 'Account stream limit reached' : safeError(err), code: err.code, resetAt: err.resetAt }); }
+  } catch (err) { res.status(err.code === 'RESPONSE_TOO_LARGE' ? 502 : err.code ? 403 : 503).json({ error: err.code === 'ACCOUNT_STREAM_LIMIT' ? 'Account stream limit reached' : safeError(err), code: err.code, resetAt: err.resetAt }); }
 });
 
 // Plugin route registration -- runs after every core middleware above, so

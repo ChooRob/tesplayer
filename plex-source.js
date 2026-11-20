@@ -7,7 +7,7 @@ import { rewriteManifest } from './plex-manifest.js';
 import { resolveAccountId, authorizedNextUp } from './profile-identity.js';
 import { installationId } from './private-storage.js';
 import { QUALITY_LEVELS, normalizeQuality, qualityTiers, plexProfileConstraints } from './public/engine/quality-tiers.js';
-import { directPlexOrigin, fetchAvatar, mediaProxyPath, safeError } from './security.js';
+import { directPlexOrigin, fetchAvatar, mediaProxyPath, readBodyText, safeError } from './security.js';
 import { plexSessionId, createPlexSessionProbe, fetchPlexSegment } from './plex-session.js';
 import { sendMediaServerSlow } from './media-server-wait.js';
 import { createPlexLibrary } from './plex-library.js';
@@ -19,6 +19,8 @@ import * as localProgress from './local-progress.js';
 import { adminConfigured, adminSpec, plexEmail } from './admin-auth.js';
 import { firstPluginWith } from './plugins.js';
 import { createPlexAccountDirectory } from './plex-account-directory.js';
+
+const PLAYLIST_LIMIT = 4 * 1024 * 1024;
 
 export async function createPlexSource({ id = 'plex', config, plugins, store, pipeUpstream, env = process.env, signedIn = null }) {
   // Single tenant (no plugin choosing servers): only the Plex account whose
@@ -292,7 +294,7 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
     }
     state.active = active;
 
-    const manifest = await plexRes.text();
+    const manifest = await readBodyText(plexRes, PLAYLIST_LIMIT);
     timing.playlist = performance.now();
     if (process.env.NODE_ENV !== 'production') {
       console.info('[plex-start-timing]', JSON.stringify({ kind, detailsMs: Math.round(timing.details - timing.startedAt), decisionMs: Math.round(timing.decision - timing.details), playlistMs: Math.round(timing.playlist - timing.decision) }));
@@ -332,7 +334,7 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
       if (!/^(video\/|audio\/|application\/(?:vnd\.apple\.mpegurl|x-mpegurl|octet-stream))/.test(contentType)) { await upstream.body?.cancel(); return res.status(502).end(); }
 
       if (contentType.includes('mpegurl')) {
-        const text = await upstream.text();
+        const text = await readBodyText(upstream, PLAYLIST_LIMIT);
         res.status(upstream.status);
         res.set('Content-Type', contentType);
         res.send(rewriteManifest(text, url, ownedSession, req.query.direct === '1' ? directTokenForRequest(req) : ''));
@@ -345,7 +347,7 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
       else res.end();
     } catch (err) {
       console.error('Plex request failed');
-      res.status(500).send(safeError(err));
+      res.status(err.code === 'RESPONSE_TOO_LARGE' ? 502 : 500).send(safeError(err));
     }
   }
 
