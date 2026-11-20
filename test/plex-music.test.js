@@ -781,3 +781,11 @@ test('the Shuffle and Radio buttons really are hidden where the screen has no su
   const playlist = browse.slice(browse.indexOf('async function openPlaylist'), browse.indexOf('async function openPlaylist') + 2500);
   assert.doesNotMatch(playlist.slice(0, playlist.indexOf('renderGrid')), /radio:/, 'a playlist has no radio');
 });
+
+test('music going round again on a shuffled repeat is mixed at the end, and that one track is not opened ahead', () => {
+  const page = readFileSync(new URL('../public/canvas2.html', import.meta.url), 'utf8');
+  assert.match(page, /if \(wrapsReshuffled\(withIndex\(queueData, queueIndex\)\)\) \{\s+discardNextPlan\(\);\s+queueData = reshuffledForRepeat\(withIndex\(queueData, queueIndex\)\);\s+queue = queueData\.items;\s+\}\s+goToQueueIndex\(to\);/,
+    'mixed again before it goes round, with any track opened ahead (taken from the old order) let go');
+  assert.match(page, /if \(wrapsReshuffled\(withIndex\(queueData, queueIndex\)\)\) return;\s+const pos = nextPosition\(withIndex\(queueData, queueIndex\), \{ auto: true \}\);/,
+    'nothing is opened ahead from the end of such a queue, since what follows is not known yet');
+});

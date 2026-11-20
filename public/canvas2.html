@@ -590,7 +590,7 @@
     import { setupFullscreenButton } from '/fullscreen.js';
     import { parseVtt, pickTrack, preferenceFor, readPreference, writePreference, createCaptionLayer } from '/captions.js';
     import { hydrateIcons, iconEl, iconSvg } from '/icons.js';
-    import { readQueue, saveQueue, createQueue, positionOf, withIndex, visibleWindow, shuffleQueue, unshuffleQueue, nextPosition, nextRepeat, rollRadio, queueWindow } from '/music-queue.js';
+    import { readQueue, saveQueue, createQueue, positionOf, withIndex, visibleWindow, shuffleQueue, unshuffleQueue, nextPosition, nextRepeat, rollRadio, queueWindow, wrapsReshuffled, reshuffledForRepeat } from '/music-queue.js';
     import { gatherRadio, RADIO_SIZE, RADIO_KEEP_PLAYED } from '/music-radio.js';
     import { activeLine } from '/lyrics-view.js';
     import { MUSIC_MESSAGE, fromParent, cleanCommand } from '/music-host.js';
@@ -1482,7 +1482,17 @@
       function goNext({ auto }) {
         if (!queueData) { if (queue[queueIndex + 1]) goToQueueIndex(queueIndex + 1); return; }
         const to = nextPosition(withIndex(queueData, queueIndex), { auto });
-        if (to !== null) { goToQueueIndex(to); return; }
+        if (to !== null) {
+          // A shuffled queue set to repeat all goes round again in a new order, never opening on the one just played.
+          // (A track already opened ahead was taken from the old order, so it goes.)
+          if (wrapsReshuffled(withIndex(queueData, queueIndex))) {
+            discardNextPlan();
+            queueData = reshuffledForRepeat(withIndex(queueData, queueIndex));
+            queue = queueData.items;
+          }
+          goToQueueIndex(to);
+          return;
+        }
         // A radio does not end: at the end of what it had, it gets more and carries on.
         if (queueData.radio) extendRadio().then((added) => { if (added) goNext({ auto }); });
       }
@@ -1850,6 +1860,9 @@
       }
       async function prepareNextTrack() {
         if (nextPlan || !isMusic || isLive || movingOn || selection.mode !== 'canvas' || !queueData || typeof player?.prepareNext !== 'function') return;
+        // From the end of a shuffled queue that repeats, what comes next is not known until it is mixed again, at the end:
+        // that one track is loaded the usual way, a moment later than a gapless one.
+        if (wrapsReshuffled(withIndex(queueData, queueIndex))) return;
         const pos = nextPosition(withIndex(queueData, queueIndex), { auto: true });
         const track = pos === null ? null : queueData.items[pos];
         if (!track) return;

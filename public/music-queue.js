@@ -72,6 +72,24 @@ export function nextPosition(queue, { auto = false } = {}) {
   return queue.repeat !== 'off' && queue.items.length ? 0 : null;
 }
 
+// A shuffled queue that repeats all goes round again in a new order, not the same one again. This says the step on from
+// the end of such a queue (with more than two to mix) is a wrap to the start, which is when it is mixed afresh.
+export const wrapsReshuffled = queue => queue.shuffled === true && queue.repeat === 'all' && queue.items.length > 2
+  && queue.index === queue.items.length - 1;
+
+// The queue mixed again for the next time round, standing at its first, which is never the one just played.
+// Anything else is returned as it was.
+export function reshuffledForRepeat(queue, random = Math.random) {
+  if (!wrapsReshuffled(queue)) return queue;
+  const justPlayed = queue.items[queue.index];
+  const items = shuffled(queue.items, random);
+  if (items[0].ratingKey === justPlayed.ratingKey) {
+    const other = items.findIndex(item => item.ratingKey !== justPlayed.ratingKey);
+    if (other > 0) [items[0], items[other]] = [items[other], items[0]];
+  }
+  return { ...queue, items, index: 0 };
+}
+
 export function saveQueue(storage, queue) {
   try { storage.setItem(KEY, JSON.stringify(queue)); return true; } catch { return false; }
 }

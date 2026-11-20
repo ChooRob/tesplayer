@@ -151,6 +151,8 @@
   "test/lyrics.test.js",
   "test/music-host.test.js",
   "test/music-queue.test.js",
+  "test/video-queue-browse.test.js",
+  "test/video-queue-player.test.js",
   "test/music-radio.test.js",
   "test/next-countdown.test.js",
   "plex-owner-link.js",
