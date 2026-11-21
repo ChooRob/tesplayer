@@ -34,6 +34,13 @@ async function tenantFetch(input, init = {}) {
   if (url.pathname === '/Users/AuthenticateByName') return JSON.parse(init.body).Pw === 'right' ? json({ AccessToken: TOKEN, ServerId: OTHER_ID, User: { Id: USER_ID, Name: 'Pat' } }) : new Response('', { status: 401 });
   if (url.pathname === `/Users/${USER_ID}/Views`) return json({ Items: [{ Id: '3', Name: 'Movies', CollectionType: 'movies' }] });
   const playSession = url.host === 'twin.example' ? 'd'.repeat(32) : PLAY;
+  // Item 8 is a track and item 9 is an artist on one server and a show on another (ids are only unique within a server).
+  if (url.pathname === `/Users/${USER_ID}/Items/8`) return json({ Id: 8, Name: 'Song', Type: 'Audio' });
+  if (url.pathname === `/Users/${USER_ID}/Items/9`) return json({ Id: 9, Name: 'Thing', Type: url.host === 'friend.example' ? 'MusicArtist' : 'Series' });
+  if (url.pathname === `/Users/${USER_ID}/Items` && url.searchParams.get('AlbumArtistIds') === '9') return json({ Items: [{ Id: 20, Name: 'An Album', Type: 'MusicAlbum' }] });
+  if (url.pathname === '/Shows/9/Seasons') return json({ Items: [{ Id: 30, Name: 'Season 1', Type: 'Season', SeriesId: 9 }] });
+  if (url.pathname === '/Items/8/PlaybackInfo') return json({ PlaySessionId: playSession, MediaSources: [{ Id: 'mediasource_8', TranscodingUrl: `/audio/8/master.m3u8?PlaySessionId=${playSession}&api_key=SECRET` }] });
+  if (url.pathname === '/audio/8/master.m3u8') return new Response(`#EXTM3U\nmain.m3u8?PlaySessionId=${playSession}\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
   if (url.pathname === '/Items/7/PlaybackInfo') return json({ PlaySessionId: playSession, MediaSources: [{ Id: 'mediasource_7', TranscodingUrl: `/videos/7/master.m3u8?PlaySessionId=${playSession}&api_key=K` }] });
   if (url.host === 'bigplaylist.example' && url.pathname === '/videos/7/master.m3u8') return new Response(`#EXTM3U\n${'#EXT-X-X:0\n'.repeat(500_000)}`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
   if (url.pathname === '/videos/7/master.m3u8') return new Response(`#EXTM3U\nmain.m3u8?PlaySessionId=${playSession}\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
@@ -71,6 +78,7 @@ app.get('/who', async (req, res) => res.json({
   key: await source.auth.getSessionAccountKey(req), server: await source.auth.getSessionServer(req), admin: await source.auth.getAdminIdentity(req),
 }));
 app.get('/libraries', async (req, res) => { try { res.json(await source.library(req).libraries()); } catch { res.status(401).end(); } });
+app.get('/seasons/:id', async (req, res) => { try { res.json(await source.library(req).showSeasons(req.params.id)); } catch (error) { res.status(502).json({ error: error.message }); } });
 app.post('/progress', async (req, res) => { await source.watchState.reportProgress(req, req.body); res.json({ ok: true }); });
 const server = await new Promise(resolve => { const s = createServer(app).listen(0, '127.0.0.1', () => resolve(s)); });
 after(() => server.close());
@@ -153,6 +161,28 @@ test('a cap below the minimum supported stream rate refuses playback', async () 
   assert.equal(response.status, 500);
   assert.match((await response.json()).error, /bitrate cap is too low/);
   assert.equal(pluginCalls.filter(call => call.path === '/Items/7/PlaybackInfo').length, before);
+});
+
+test('a cap too low for a film still leaves room for music', async () => {
+  let response = await send('/api/auth/emby/start', { server: 'https://tiny.example' });
+  keepCookies(response);
+  response = await send('/api/auth/emby/password', { username: 'pat', password: 'right' });
+  keepCookies(response);
+  response = await send('/api/start?key=8');
+  assert.equal(response.status, 200, await response.clone().text());
+  const info = pluginCalls.findLast(call => call.path === '/Items/8/PlaybackInfo');
+  assert.equal(info.params.get('MaxStreamingBitrate'), String(Math.min(256_000, 300_000)), 'music asks for its own rate, within the cap');
+  assert.equal((await send('/api/start?key=7&quality=low')).status, 500, 'a film still needs more than the cap allows');
+});
+
+test('whether an id is an artist is remembered for its own server only', async () => {
+  let response = await send('/api/auth/emby/start', { server: 'https://friend.example' });
+  keepCookies(response);
+  keepCookies(await send('/api/auth/emby/password', { username: 'pat', password: 'right' }));
+  assert.equal((await (await send('/seasons/9')).json())[0].type, 'album', 'an artist on this server');
+  keepCookies(await send('/api/auth/emby/start', { server: 'https://slow.example' }));
+  keepCookies(await send('/api/auth/emby/password', { username: 'pat', password: 'right' }));
+  assert.equal((await (await send('/seasons/9')).json())[0].type, 'season', 'the same id is a show on the other server');
 });
 
 test('progress stays with each viewer and server when IDs match', async () => {

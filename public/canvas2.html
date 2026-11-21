@@ -606,6 +606,7 @@
     import { waitForServer } from '/engine/server-wait.js';
     import { useSourceRate, isMcu3, thisDevice } from '/engine/device.js';
     import { showArt } from '/artwork.js';
+    import { MUSIC_SESSION_KEY } from '/saved-music.js';
     hydrateIcons();
     import { createQuotaGuard } from '/engine/quota-guard.js';
     import { createPlaybackBanner } from '/playback-banner.js';
@@ -2169,8 +2170,10 @@
         target.searchParams.set('key', ratingKey);
         // `queue` means music from the first moment, so a video names its queue apart.
         if (queueId) target.searchParams.set(video ? 'videoQueue' : 'queue', queueId);
-        // Music held behind the browse screen gives way to a video: the video takes the whole page.
+        // Music held behind the browse screen gives way to a video: the video takes the whole page, and the music kept
+        // for reopening the app is let go (it would come back as background music, where the film now is).
         const leavesFrame = embedded && video;
+        if (leavesFrame) { try { localStorage.removeItem(MUSIC_SESSION_KEY); } catch { /* nothing kept */ } }
         if (embedded && !leavesFrame) target.searchParams.set('embedded', '1');
         // Keep where we came from and how the viewer plays; quality is chosen afresh.
         for (const name of ['playback']) {

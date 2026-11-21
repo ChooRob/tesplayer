@@ -796,6 +796,8 @@ test('a playlist screen plays all of it, tracks as music and videos as films, an
   assert.match(screen, /play: \(\) => playQueue\(\{ label: playlist\.title, items: entries \}\)/);
   assert.match(screen, /shuffle: \(\) => playQueue\(\{ label: playlist\.title, items: entries, shuffle: true \}\)/);
   assert.match(screen, /renderGrid\(entries,/, 'every entry is shown, not just the tracks');
+  // Saved music that points at a video is not put back as background music.
+  assert.match(html, /if \(!track \|\| track\.video\) \{ forget\(\); return; \}/);
   // A queue that opens on a video starts as a film does.
   assert.match(html, /video = video \|\| !!queue\.items\[queue\.index\]\.video;/);
 });
@@ -805,6 +807,7 @@ test('the player opens each queue entry the way it is: a video as a film (taking
   assert.match(player, /goToItem\(track\.ratingKey, \{ queue: queueData\?\.id, video: !!track\.video \}\)/);
   assert.match(player, /queueId\) target\.searchParams\.set\(video \? 'videoQueue' : 'queue', queueId\)/);
   assert.match(player, /const leavesFrame = embedded && video;/);
+  assert.match(player, /if \(leavesFrame\) \{ try \{ localStorage\.removeItem\(MUSIC_SESSION_KEY\); \}/, 'the music kept for reopening the app is let go, so it does not come back behind the film');
   assert.match(player, /\(leavesFrame \? window\.parent\.location : location\)\.replace\(target\)/);
   assert.match(player, /if \(!track \|\| track\.video\) return;/, 'a video is not opened ahead as music');
   assert.match(player, /if \(!track \|\| track\.video \|\| movingOn/, 'a video is not skipped to in the music page');

@@ -900,7 +900,8 @@
             if (queue) saveQueue(sessionStorage, queue);
           }
           const track = queue?.items[queue.index];
-          if (!track) { forget(); return; }
+          // (A video is not music to put back behind the browse screen.)
+          if (!track || track.video) { forget(); return; }
           const params = new URLSearchParams({ key: track.ratingKey, queue: queue.id });
           // Music that was playing carries on; if the browser will not start sound by itself, the player offers a tap to unlock it.
           if (saved.playing !== true) params.set('paused', '1');

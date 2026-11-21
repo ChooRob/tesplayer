@@ -26,6 +26,7 @@ const PLAYLIST_LIMIT = 4 * 1024 * 1024;
 const AUDIO_BITRATE = 128_000;
 // Music is transcoded at a higher rate than the sound of a film.
 const MUSIC_BITRATE = 256_000;
+const MUSIC_MIN_BITRATE = 64_000;
 // The older car screen's sound output needs 48 kHz; see `rate` below.
 const MUSIC_SAMPLE_RATE = '48000';
 const ITEM_ID = /^\d{1,12}$/;
@@ -565,12 +566,14 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
     const credential = credentialFor(req);
     const userItems = values => api(`/Users/${credential.userId}/Items?${query(values)}`, { credential });
     // Whether an id is a music artist (its children are albums) rather than a show.
+    // (An id is only unique within its server, so the answer is kept per server.)
     const isArtist = async id => {
-      const cached = kindOfId.get(id);
+      const key = `${accountKeyOf(credential)}:${id}`;
+      const cached = kindOfId.get(key);
       if (cached !== undefined) return cached;
       const artist = typeOf(await api(`/Users/${credential.userId}/Items/${id}`, { credential })) === 'artist';
       if (kindOfId.size >= 500) kindOfId.delete(kindOfId.keys().next().value);
-      kindOfId.set(id, artist);
+      kindOfId.set(key, artist);
       return artist;
     };
     // An artist's tracks: those it is credited on, and every track of its albums (a track can carry another name for
@@ -895,10 +898,11 @@ export async function createEmbySource({ id = 'emby', config, plugins = [], stor
     const asked = QUALITY_LEVELS.includes(req.query.quality) ? req.query.quality : 'high';
     const quality = capKbps && asked === 'ultra' ? 'high' : normalizeQuality(asked);
     const tier = { ...qualityTiers(config.plex.videoBitrate)[quality] };
-    if (capKbps && capKbps < 300 + AUDIO_BITRATE / 1000) throw new Error('Emby server bitrate cap is too low for playback');
+    // A cap has to leave room for the stream asked for: a film's lowest tier, or music's lowest rate.
+    if (capKbps && capKbps < (music ? MUSIC_MIN_BITRATE / 1000 : 300 + AUDIO_BITRATE / 1000)) throw new Error('Emby server bitrate cap is too low for playback');
     if (capKbps) tier.videoBitrate = Math.max(300, Math.min(tier.videoBitrate, capKbps - AUDIO_BITRATE / 1000));
     const videoBitrate = tier.videoBitrate * 1000;
-    const musicBitrate = capKbps ? Math.min(MUSIC_BITRATE, Math.max(64_000, capKbps * 1000)) : MUSIC_BITRATE;
+    const musicBitrate = capKbps ? Math.min(MUSIC_BITRATE, capKbps * 1000) : MUSIC_BITRATE;
     // A chosen subtitle track is drawn into the picture; with none chosen nothing is.
     const subtitle = typeof req.query.subtitle === 'string' && TRACK_ID.test(req.query.subtitle) ? req.query.subtitle : null;
     // Asking for index -1 here keeps Emby from picking a default track to burn in.
