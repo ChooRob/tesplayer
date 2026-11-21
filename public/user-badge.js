@@ -215,7 +215,7 @@ function openSwitchUserOverlay({ adminAvailable, profiles = true, title: userTit
   const pinSubmit = document.createElement('button');
   pinSubmit.type = 'submit';
   pinSubmit.textContent = 'Go';
-  pinSubmit.style.cssText = 'background:#e5a00d;color:#111;border:none;border-radius:6px;padding:10px 16px;font-size:14px;font-weight:700;cursor:pointer;margin-left:8px;';
+  pinSubmit.style.cssText = 'background:#ffc233;color:#111;border:none;border-radius:6px;padding:10px 16px;font-size:14px;font-weight:700;cursor:pointer;margin-left:8px;';
   pinForm.appendChild(pinInput);
   pinForm.appendChild(pinSubmit);
   card.appendChild(pinForm);

@@ -30,7 +30,9 @@
 // returns the album's tracks (type 'track', with `episode` the track number, `season` the disc,
 // `artist`, `album`, durationMs). Artwork is square. A track is played like any item: playback.start
 // answers with an HLS playlist, here audio only. A library may list `views` (artists, albums, tracks) and
-// libraryItems takes { sort, view, start, size }; sources that cannot page just answer with everything. Optional
+// libraryItems takes { sort, view, start, size, genre }; sources that cannot page just answer with everything. A `genres`
+// view lists items of type 'genre' ({ ratingKey, title }), and `genre` (one of their ratingKeys) with view 'albums' lists
+// only that genre's albums. Optional
 // playlists() -> [{ ratingKey, type: 'playlist', title, thumbnail, leafCount }], playlistItems(id) -> tracks (a playlist may
 // also hold videos: items of type 'movie' or 'episode', in its order, which the page opens where they are), and
 // similarArtists(artistId) -> [{ title, items: [artist items] }], popularTracks(artistId) -> tracks and

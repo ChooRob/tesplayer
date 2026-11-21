@@ -98,6 +98,8 @@ globalThis.fetch = async (value, options = {}) => {
   const track = { Id: TRACK, Name: 'The Song', Type: 'Audio', IndexNumber: 2, ParentIndexNumber: 1, Album: 'The Record', AlbumId: ALBUM, AlbumPrimaryImageTag: 'tag',
     Artists: ['The Band'], AlbumArtist: 'The Band', AlbumArtists: [{ Id: ARTIST, Name: 'The Band' }], ArtistItems: [{ Id: ARTIST, Name: 'The Band' }],
     RunTimeTicks: 200 * 1e7, UserData: {}, ImageTags: {}, MediaSources: [{ MediaStreams: [{ Type: 'Audio', Codec: 'flac' }] }] };
+  // Genres: the music library has one; the first call lists it (a library with none would not offer the Genres view).
+  if (p === '/MusicGenres') return json({ TotalRecordCount: 1, Items: [{ Id: 'genre1', Name: 'Rock', SortName: 'rock' }] });
   if (p === '/Artists/AlbumArtists') return json({ TotalRecordCount: 1, Items: [artist] });
   if (p === `/Artists/${ARTIST}/Similar`) return json({ Items: [{ ...artist, Id: '6'.repeat(32), Name: 'Another Band' }] });
   if (p === `/Items/${TRACK}/InstantMix`) return json({ Items: [track, { ...track, Id: '7'.repeat(31) + 'a', Name: 'Next Song' }] });
@@ -242,7 +244,7 @@ test('browsing returns the same shapes the pages already use for Plex', async ()
   const cookie = await session();
   assert.deepEqual((await request('/api/library/libraries', { cookie })).json,
     [{ id: LIB, title: 'Movies', type: 'movie' }, { id: SHOWS, title: 'Shows', type: 'show' },
-      { id: MUSIC, title: 'Music', type: 'music', views: [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }] },
+      { id: MUSIC, title: 'Music', type: 'music', views: [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }, { id: 'genres', label: 'Genres' }] },
       { id: HOME_VIDEOS, title: 'Home', type: 'video' }, { id: MUSIC_VIDEOS, title: 'Clips', type: 'video' }]);
   const { items } = (await request(`/api/library/library/${LIB}?sort=titleSort`, { cookie })).json;
   // A source without playlists, similar artists or lyrics answers with none, not an error.

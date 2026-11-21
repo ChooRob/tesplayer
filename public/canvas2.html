@@ -1271,6 +1271,43 @@
           signal: AbortSignal.timeout(5000),
         }).catch(() => {}).finally(() => { canvasHealthInFlight = false; });
       }
+      // Page lifecycle, for the health log. A page that crashes ("Aw, Snap") can say nothing as it goes, so each report
+      // also leaves a note in localStorage that is marked clean when the page is left in the ordinary way; the next page
+      // to load finding one not marked clean reports it, with what that page last saw.
+      const LAST_PAGE_KEY = 'freeStuffCrazyPlayer.lastPage';
+      function sendLifecycle(event, extra = {}) {
+        if (selection.mode !== 'canvas') return;
+        const stats = lastCanvasStats || {};
+        const body = { playbackId, live: isLive, quality: currentQuality, state: stats.state || 'loading', lifecycle: event, ...extra };
+        if (!extra.previous) for (const name of ['mediaTime', 'videoDropCount', 'videoRenderCount', 'videoQueueLength']) if (Number.isFinite(stats[name])) body[name] = stats[name];
+        try {
+          fetch('/api/playback/canvas-health', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: true, signal: AbortSignal.timeout(5000) }).catch(() => {});
+        } catch { /* diagnostics only */ }
+      }
+      function noteThisPage(clean) {
+        try {
+          const stats = lastCanvasStats || {};
+          localStorage.setItem(LAST_PAGE_KEY, JSON.stringify({ playbackId, at: Date.now(), clean, quality: currentQuality, mediaTime: stats.mediaTime, videoDropCount: stats.videoDropCount, videoRenderCount: stats.videoRenderCount, videoQueueLength: stats.videoQueueLength, heapBytes: performance.memory?.usedJSHeapSize }));
+        } catch { /* storage unavailable */ }
+      }
+      // Started once the server says diagnostics are on (a development server).
+      function startLifecycleLogging() {
+        try {
+          const before = JSON.parse(localStorage.getItem(LAST_PAGE_KEY) || 'null');
+          if (before && before.clean === false && typeof before.playbackId === 'string' && /^[a-zA-Z0-9-]{1,100}$/.test(before.playbackId)) {
+            const body = { playbackId: before.playbackId, live: false, state: 'error', lifecycle: 'previous-unclean', lifecycleAgeSeconds: Math.max(0, Math.round((Date.now() - before.at) / 1000)), error: 'page ended without leaving cleanly' };
+            for (const name of ['mediaTime', 'videoDropCount', 'videoRenderCount', 'videoQueueLength', 'heapBytes']) if (Number.isFinite(before[name])) body[name] = before[name];
+            if (typeof before.quality === 'string') body.quality = before.quality;
+            fetch('/api/playback/canvas-health', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: true, signal: AbortSignal.timeout(5000) }).catch(() => {});
+          }
+        } catch { /* nothing kept, or not readable */ }
+        noteThisPage(false);
+        setInterval(() => noteThisPage(false), 3000);
+        document.addEventListener('freeze', () => sendLifecycle('freeze'));
+        document.addEventListener('resume', () => sendLifecycle('resume'));
+        document.addEventListener('visibilitychange', () => sendLifecycle(document.visibilityState === 'hidden' ? 'hidden' : 'visible'));
+        window.addEventListener('pagehide', () => { noteThisPage(true); sendLifecycle('pagehide'); });
+      }
       if (selection.mode === 'canvas') {
         const healthTimer = setInterval(reportCanvasHealth, 15000);
         // Outside production the server also keeps audio-output details; report
@@ -1278,6 +1315,7 @@
         // (the server accepts 12 reports a minute).
         fetch('/api/playback/diagnostics').then(res => (res.ok ? res.json() : null)).then(info => {
           if (!info?.enabled) return;
+          startLifecycleLogging();
           clearInterval(healthTimer);
           setInterval(reportCanvasHealth, 6000);
         }).catch(() => {});
