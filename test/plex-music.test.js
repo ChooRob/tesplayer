@@ -179,8 +179,8 @@ test('the player shows a track as a music player: cover, the album\'s queue with
   assert.match(page, /\.q\.played button \{ opacity: \.5; \}/, 'earlier tracks are dimmed');
   assert.match(page, /api\/library\/season\/\$\{encodeURIComponent\(albumId\)\}\/episodes/, 'the queue is the album, read through the same call as an album screen');
   assert.match(page, /keepControlsUp = true;\s+showOverlay\(\);/, 'the controls stay up');
-  assert.match(page, /if \(isMusic\) \{ playNextBtn\.hidden = true; return; \}/, 'the controls have Next, so the floating one is hidden');
-  assert.match(page, /if \(isMusic && queue\.length && !movingOn\) \{ goNext\(\{ auto: true \}\); return; \}/, 'no countdown between tracks: the next one starts, or the same again if repeating');
+  assert.match(page, /if \(isMusic \|\| queue\.length\) \{ playNextBtn\.hidden = true; return; \}/, 'the controls have Next, so the floating one is hidden');
+  assert.match(page, /if \(queue\.length && !movingOn\) \{ goNext\(\{ auto: true \}\); return; \}/, 'no countdown between tracks (or queued videos): the next one starts, or the same again if repeating');
   assert.match(page, /id="prevTrackBtn"/);
   assert.match(page, /id="nextTrackBtn"/);
   const media = readFileSync(new URL('../public/media-session.js', import.meta.url), 'utf8');

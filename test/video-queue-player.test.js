@@ -282,3 +282,11 @@ test('an MCU3 reads further ahead of a film, and may hold more of it; other devi
   const player = readFileSync(new URL('../public/engine/player.js', import.meta.url), 'utf8');
   assert.match(player, /new SegmentPrefetcher\(\{ readAheadSeconds, maxBytes: readAheadMaxBytes,/);
 });
+
+test('a queue of videos moves on at the end with no countdown; only a show\'s episodes count down', () => {
+  const html = readFileSync(new URL('../public/canvas2.html', import.meta.url), 'utf8');
+  // A track or a queued video is followed at once.
+  assert.match(html, /function startNextCountdown\(\) \{\s*if \(queue\.length && !movingOn\) \{ goNext\(\{ auto: true \}\); return; \}/);
+  // ...and has no Play Next button, since the controls have Next.
+  assert.match(html, /if \(isMusic \|\| queue\.length\) \{ playNextBtn\.hidden = true; return; \}/);
+});

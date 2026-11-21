@@ -1607,8 +1607,9 @@
         syncQueueButtons();
         if (!isMusic) showVideoQueue();
       }
-      // Videos queued by Play or Shuffle on the browse page: Previous and Next go through the queue, Play Next
-      // and its countdown move on to the next in it, and shuffle and repeat work as they do for music.
+      // Videos queued by Play or Shuffle on the browse page (a library, or a playlist): Previous and Next go through the
+      // queue, the next one follows at the end with no countdown (that is for a show's episodes), and shuffle and repeat
+      // work as they do for music.
       let videoTitle = '';
       function startVideoQueue() {
         queueIndex = positionOf(queueData, itemKey);
@@ -2133,14 +2134,15 @@
       }
       function updateNextButton() {
         if (nextCountdown.active) return;
-        if (isMusic) { playNextBtn.hidden = true; return; } // the controls have Next
+        if (isMusic || queue.length) { playNextBtn.hidden = true; return; } // the controls have Next
         const length = player?.duration;
         playNextBtn.hidden = !(nextEpisode && Number.isFinite(length) && length > 0
           && player.clock.currentTime / length >= watchedAt);
       }
-      // At the end, give the viewer a few seconds to cancel before moving on.
+      // At the end of an episode, give the viewer a few seconds to cancel before moving on. A track, or a video in a queue
+      // (a playlist, or a library played through), is followed at once.
       function startNextCountdown() {
-        if (isMusic && queue.length && !movingOn) { goNext({ auto: true }); return; }
+        if (queue.length && !movingOn) { goNext({ auto: true }); return; }
         if (!nextEpisode || movingOn || isLive || declinedNext || nextCountdown.active) return;
         playNextBtn.hidden = false;
         cancelNextBtn.hidden = false;
