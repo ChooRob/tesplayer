@@ -21,18 +21,27 @@ const SIGN_IN_JSON_LIMIT = 256 * 1024;
 const API_JSON_LIMIT = 32 * 1024 * 1024;
 const PLAYLIST_LIMIT = 4 * 1024 * 1024;
 const AUDIO_BITRATE = 128_000;
+// Music is transcoded at a higher rate than the sound of a film.
+const MUSIC_BITRATE = 256_000;
+const MUSIC_MIN_BITRATE = 64_000;
+// The older car screen's sound output needs 48 kHz; see `rate` below.
+const MUSIC_SAMPLE_RATE = '48000';
 const ID = /^[0-9a-f]{32}$/;
 // Media paths a viewer may fetch through /proxy/, relative to the server.
 // The thumbnails shown when scrubbing (Trickplay) are listed in the master playlist as image streams. The player has
 // no use for them, they are not media this proxy serves, and their playlists carry no play session, so they are
 // dropped rather than let through: everything else in a playlist must still be one of the media paths below.
 const TRICKPLAY_TAG = /^#EXT-X-IMAGE-STREAM-INF\b/;
-const MEDIA_PATH = /^videos\/[0-9a-f-]{32,36}\/(?:master\.m3u8|main\.m3u8|hls1\/[A-Za-z0-9_-]{1,64}\/\d{1,7}\.(?:ts|mp4|m4s))$/i;
+const MEDIA_PATH = /^(?:videos|audio)\/[0-9a-f-]{32,36}\/(?:master\.m3u8|main\.m3u8|hls1\/[A-Za-z0-9_-]{1,64}\/\d{1,7}\.(?:ts|mp4|m4s|aac))$/i;
 const IMAGE_TYPES = new Set(['Primary', 'Backdrop', 'Thumb']);
 const THUMBNAIL_PRESETS = {
   landscape: { width: 600, height: 338 },
   poster: { width: 390, height: 585 },
   backdrop: { width: 1280, height: 720 },
+  // Music artwork is square.
+  square: { width: 400, height: 400 },
+  cover: { width: 640, height: 640 },
+  tiny: { width: 160, height: 160 },
 };
 const PUBLIC_PATHS = new Set(['/api/auth/jellyfin/start', '/api/auth/jellyfin/poll', '/api/auth/jellyfin/password']);
 
@@ -484,9 +493,12 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
 
   // The libraries listed, by the server's type for them. Home videos and music videos are plain video files: films with
   // little or no metadata, so they are "video" libraries, which is where Play and Shuffle are offered.
-  const LIBRARY_TYPES = { movies: 'movie', tvshows: 'show', homevideos: 'video', musicvideos: 'video' };
+  const LIBRARY_TYPES = { movies: 'movie', tvshows: 'show', homevideos: 'video', musicvideos: 'video', music: 'music' };
+  // A music library can be listed by artist, by album or straight to every track.
+  const MUSIC_VIEWS = [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }];
+  const MUSIC_TYPES = new Set(['artist', 'album', 'track']);
   // A home video or a music video is a film as far as the pages go: a video, played from its start or where it was left.
-  const TYPES = { Movie: 'movie', Video: 'movie', MusicVideo: 'movie', Series: 'show', Season: 'season', Episode: 'episode' };
+  const TYPES = { Movie: 'movie', Video: 'movie', MusicVideo: 'movie', Series: 'show', Season: 'season', Episode: 'episode', MusicArtist: 'artist', MusicAlbum: 'album', Audio: 'track' };
   const typeOf = item => TYPES[item.Type] || String(item.Type || '').toLowerCase();
   const viewOffset = item => ms(item.UserData?.PlaybackPositionTicks) || 0;
   function episodeCounts(item) {
@@ -496,18 +508,59 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
     return { leafCount, viewedLeafCount: Number.isFinite(unplayed) ? Math.max(0, leafCount - unplayed) : 0 };
   }
 
+  // A track's picture is its album's, the same for every track of it; with none, the track's own.
+  function trackArt(item, preset) {
+    if (item.AlbumPrimaryImageTag && ID.test(item.AlbumId || '')) {
+      const { width, height } = THUMBNAIL_PRESETS[preset];
+      return `/api/library/thumb?${new URLSearchParams({ path: `${item.AlbumId}/Primary`, width: String(width), height: String(height) })}`;
+    }
+    return thumbnailUrl(item, 'Primary', preset);
+  }
+  // An artist's picture, for a track or album with none of its own (or none that loads). It is only said to be there:
+  // a picture that is not is replaced by the page.
+  function artistArt(item, preset) {
+    const artist = item.ArtistItems?.[0]?.Id || item.AlbumArtists?.[0]?.Id;
+    if (!ID.test(artist || '')) return null;
+    const { width, height } = THUMBNAIL_PRESETS[preset];
+    return `/api/library/thumb?${new URLSearchParams({ path: `${artist}/Primary`, width: String(width), height: String(height) })}`;
+  }
+  const artistName = item => item.Artists?.[0] || item.AlbumArtist || null;
+  function mapTrack(item, preset = 'tiny') {
+    return {
+      ratingKey: item.Id,
+      type: 'track',
+      title: item.Name,
+      episode: item.IndexNumber,
+      season: item.ParentIndexNumber,
+      artist: artistName(item),
+      album: item.Album || null,
+      duration: minutes(item.RunTimeTicks),
+      durationMs: ms(item.RunTimeTicks),
+      viewOffset: viewOffset(item),
+      thumbnail: trackArt(item, preset) || artistArt(item, preset),
+      audioCodec: item.MediaSources?.[0]?.MediaStreams?.find(stream => stream.Type === 'Audio')?.Codec,
+    };
+  }
+  // The pictures of music are square.
+  const presetFor = (type, fallback) => (MUSIC_TYPES.has(type) ? 'square' : fallback);
+
   function mapListItem(item) {
     const type = typeOf(item);
+    if (type === 'track') return mapTrack(item);
     return {
       ratingKey: item.Id,
       title: item.Name,
+      ...(MUSIC_TYPES.has(type) ? { sortTitle: item.SortName || item.Name } : {}),
       year: item.ProductionYear,
       type,
-      thumbnail: thumbnailUrl(item, 'Primary', 'poster'),
+      thumbnail: thumbnailUrl(item, 'Primary', presetFor(type, 'poster')) || (type === 'album' ? artistArt(item, 'square') : null),
       duration: minutes(item.RunTimeTicks),
       durationMs: ms(item.RunTimeTicks),
       viewOffset: viewOffset(item),
       childCount: item.ChildCount,
+      // An album listed on its own still belongs to an artist, which it opens under.
+      ...(type === 'album' ? { showRatingKey: item.AlbumArtists?.[0]?.Id, showTitle: item.AlbumArtist } : {}),
+      ...(type === 'artist' ? { leafCount: item.SongCount ?? item.RecursiveItemCount } : {}),
       ...(type === 'show' ? episodeCounts(item) : { viewedLeafCount: 0 }),
     };
   }
@@ -525,7 +578,8 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
       episode: episode ? item.IndexNumber : undefined,
       showTitle: episode || type === 'season' ? item.SeriesName : undefined,
       showRatingKey: type === 'season' ? item.SeriesId : undefined,
-      thumbnail: episode ? thumbnailUrl(item, 'Primary', 'landscape') : thumbnailUrl(item, 'Primary', 'poster'),
+      thumbnail: episode ? thumbnailUrl(item, 'Primary', 'landscape') : thumbnailUrl(item, 'Primary', presetFor(type, 'poster')),
+      ...(type === 'album' ? { showRatingKey: item.AlbumArtists?.[0]?.Id, showTitle: item.AlbumArtist } : {}),
       duration: minutes(item.RunTimeTicks),
       durationMs: ms(item.RunTimeTicks),
       viewOffset: viewOffset(item),
@@ -553,11 +607,14 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
     return { SortBy: by, SortOrder: direction === 'desc' ? 'Descending' : 'Ascending' };
   }
 
+  // How each way of listing a music library is ordered: by artist, then album, then track, as Plex Web lists them.
+  const MUSIC_ORDER = { artists: 'SortName', albums: 'AlbumArtist,SortName', tracks: 'AlbumArtist,Album,ParentIndexNumber,IndexNumber' };
+
   async function libraries(credential) {
     const views = await api(`/UserViews?${userQuery(credential)}`, { credential });
     return (views.Items || [])
       .filter(view => LIBRARY_TYPES[view.CollectionType])
-      .map(view => ({ id: view.Id, title: view.Name, type: LIBRARY_TYPES[view.CollectionType] }));
+      .map(view => ({ id: view.Id, title: view.Name, type: LIBRARY_TYPES[view.CollectionType], ...(view.CollectionType === 'music' ? { views: MUSIC_VIEWS } : {}) }));
   }
 
   // An item's subtitle streams and the media source they belong to.
@@ -570,20 +627,74 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
     };
   }
 
+  // Which ids are music artists, so an artist is not looked up again each time its page is opened.
+  const kindOfId = new Map();
+
   function library(req) {
     const credential = credentialFor(req);
     const items = query => api(`/Items?${userQuery(credential, query)}`, { credential });
+    // Whether an id is a music artist (its children are albums) rather than a show.
+    // (An id is only unique within its server, so the answer is kept per server.)
+    const isArtist = async id => {
+      const key = `${accountKeyOf(credential)}:${id}`;
+      const cached = kindOfId.get(key);
+      if (cached !== undefined) return cached;
+      const artist = typeOf(await api(`/Items/${id}?${userQuery(credential)}`, { credential })) === 'artist';
+      if (kindOfId.size >= 500) kindOfId.delete(kindOfId.keys().next().value);
+      kindOfId.set(key, artist);
+      return artist;
+    };
+    // An artist's tracks: those it is credited on, and every track of its albums (a track can carry another name for
+    // the artist, or none), without a track twice.
+    const artistTracks = async artistId => {
+      const albums = (await items({ AlbumArtistIds: artistId, Recursive: 'true', IncludeItemTypes: 'MusicAlbum', Fields: ITEM_FIELDS })).Items || [];
+      const lists = await Promise.all([
+        items({ ArtistIds: artistId, Recursive: 'true', IncludeItemTypes: 'Audio', Fields: ITEM_FIELDS }),
+        ...albums.slice(0, 100).map(album => items({ ParentId: album.Id, IncludeItemTypes: 'Audio', Fields: ITEM_FIELDS })),
+      ]);
+      const seen = new Set();
+      return lists.flatMap(list => list.Items || []).filter(track => !seen.has(track.Id) && seen.add(track.Id));
+    };
+    async function fetchLyrics(trackId) {
+      try {
+        const data = await api(`/Audio/${trackId}/Lyrics?${userQuery(credential)}`, { credential });
+        const lines = (data?.Lyrics || []).map(line => ({ startMs: Number.isFinite(line.Start) ? ms(line.Start) : null, text: String(line.Text ?? '') }));
+        const timed = lines.length > 0 && lines.every(line => line.startMs !== null);
+        return { timed, lines: timed ? lines : lines.map(line => ({ startMs: null, text: line.text })) };
+      } catch { return { timed: false, lines: [] }; }
+    }
     return {
       libraries: () => libraries(credential),
-      async libraryItems(libraryId, { sort } = {}) {
+      async libraryItems(libraryId, { sort, view, start, size } = {}) {
+        // A music library: its artists, albums or tracks, in pages.
+        if (MUSIC_ORDER[view]) {
+          const paging = { ...(Number.isInteger(start) ? { StartIndex: String(start) } : {}), ...(size ? { Limit: String(size) } : {}) };
+          const order = { SortBy: MUSIC_ORDER[view], SortOrder: 'Ascending' };
+          const data = view === 'artists'
+            ? await api(`/Artists/AlbumArtists?${userQuery(credential, { ParentId: libraryId, Fields: ITEM_FIELDS, ...order, ...paging })}`, { credential })
+            : await items({ ParentId: libraryId, Recursive: 'true', IncludeItemTypes: view === 'albums' ? 'MusicAlbum' : 'Audio', Fields: ITEM_FIELDS, ...order, ...paging });
+          return { total: data.TotalRecordCount, items: (data.Items || []).map(mapListItem) };
+        }
         const data = await items({ ParentId: libraryId, Recursive: 'true', IncludeItemTypes: 'Movie,Series,Video,MusicVideo', Fields: ITEM_FIELDS, ...sortParams(sort) });
         return { total: data.TotalRecordCount, items: (data.Items || []).map(mapListItem) };
       },
       async recentlyAdded(libraryId) {
-        const latest = await api(`/Items/Latest?${userQuery(credential, { ParentId: libraryId, Limit: '12', Fields: ITEM_FIELDS, GroupItems: 'true' })}`, { credential });
+        // A music library's new arrivals are albums (not each of their tracks).
+        const music = (await libraries(credential)).find(view => view.id === libraryId)?.type === 'music';
+        const latest = await api(`/Items/Latest?${userQuery(credential, { ParentId: libraryId, Limit: '12', Fields: ITEM_FIELDS, GroupItems: 'true', ...(music ? { IncludeItemTypes: 'MusicAlbum' } : {}) })}`, { credential });
         return (Array.isArray(latest) ? latest : []).map(item => mapHubItem(item, libraryId));
       },
       async showSeasons(showId) {
+        // An artist's children are its albums.
+        if (await isArtist(showId)) {
+          const data = await items({ AlbumArtistIds: showId, Recursive: 'true', IncludeItemTypes: 'MusicAlbum', SortBy: 'ProductionYear,SortName', Fields: ITEM_FIELDS });
+          return (data.Items || []).map(album => ({
+            ratingKey: album.Id, type: 'album', title: album.Name, index: album.IndexNumber, year: album.ProductionYear,
+            showRatingKey: album.AlbumArtists?.[0]?.Id || showId, showTitle: album.AlbumArtist,
+            thumbnail: thumbnailUrl(album, 'Primary', 'square') || artistArt(album, 'square'),
+            leafCount: album.ChildCount ?? album.SongCount, viewedLeafCount: 0,
+          }));
+        }
         const data = await api(`/Shows/${showId}/Seasons?${userQuery(credential, { Fields: ITEM_FIELDS })}`, { credential });
         return (data.Items || []).map(season => ({
           ratingKey: season.Id,
@@ -597,24 +708,35 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
         }));
       },
       async showEpisodes(showId) {
+        // Every track of an artist, album by album.
+        if (await isArtist(showId)) {
+          const tracks = await artistTracks(showId);
+          const text = value => String(value ?? '');
+          tracks.sort((a, b) => text(a.Album).localeCompare(text(b.Album)) || (a.ParentIndexNumber ?? 0) - (b.ParentIndexNumber ?? 0) || (a.IndexNumber ?? 0) - (b.IndexNumber ?? 0));
+          return tracks.map(track => mapTrack(track));
+        }
         const data = await api(`/Shows/${showId}/Episodes?${userQuery(credential, { Fields: ITEM_FIELDS })}`, { credential });
         return (data.Items || []).map(mapEpisode);
       },
+      // A season's episodes, or an album's tracks.
       async seasonEpisodes(seasonId) {
-        const data = await items({ ParentId: seasonId, IncludeItemTypes: 'Episode', SortBy: 'ParentIndexNumber,IndexNumber', Fields: ITEM_FIELDS });
-        return (data.Items || []).map(mapEpisode);
+        const data = await items({ ParentId: seasonId, IncludeItemTypes: 'Episode,Audio', SortBy: 'ParentIndexNumber,IndexNumber', Fields: ITEM_FIELDS });
+        return (data.Items || []).map(item => (item.Type === 'Audio' ? mapTrack(item) : mapEpisode(item)));
       },
       async itemDetails(itemId) {
         const item = await api(`/Items/${itemId}?${userQuery(credential)}`, { credential });
         const video = item.MediaSources?.[0]?.MediaStreams?.find(stream => stream.Type === 'Video');
+        const type = typeOf(item);
+        const track = type === 'track';
         return {
           ratingKey: item.Id,
-          type: typeOf(item),
+          type,
           librarySectionId: null,
           title: item.Name,
-          showTitle: item.SeriesName || null,
-          parentKey: item.SeasonId || null,
-          grandparentKey: item.SeriesId || null,
+          showTitle: item.SeriesName || (type === 'album' ? item.AlbumArtist : null) || null,
+          // A track belongs to its album, which belongs to its artist.
+          parentKey: (track ? item.AlbumId : item.SeasonId) || null,
+          grandparentKey: (track ? item.AlbumArtists?.[0]?.Id || item.ArtistItems?.[0]?.Id : item.SeriesId) || null,
           season: item.ParentIndexNumber,
           episode: item.IndexNumber,
           year: item.ProductionYear,
@@ -625,11 +747,63 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
           duration: minutes(item.RunTimeTicks),
           durationMs: ms(item.RunTimeTicks),
           viewOffset: viewOffset(item),
-          thumbnail: thumbnailUrl(item, 'Primary', 'poster'),
+          // A track's cover is its album's, large because the player shows it that way.
+          thumbnail: track ? trackArt(item, 'cover') || artistArt(item, 'cover') : thumbnailUrl(item, 'Primary', presetFor(type, 'poster')),
+          ...(track && trackArt(item, 'cover') && artistArt(item, 'cover') ? { fallbackThumbnail: artistArt(item, 'cover') } : {}),
           backdrop: thumbnailUrl(item, 'Backdrop', 'backdrop'),
+          ...(track ? { artist: artistName(item), album: item.Album || null } : {}),
           videoCodec: video?.Codec,
           resolution: video ? `${video.Width}x${video.Height}` : null,
         };
+      },
+      // An artist's most played tracks.
+      async popularTracks(artistId) {
+        const tracks = await artistTracks(artistId);
+        const plays = track => track.UserData?.PlayCount ?? 0;
+        return tracks.sort((x, y) => plays(y) - plays(x)).slice(0, 10).map(track => mapTrack(track));
+      },
+      // Artists that sound like an artist, as one row.
+      async similarArtists(artistId) {
+        const data = await api(`/Artists/${artistId}/Similar?${userQuery(credential, { Limit: '12', Fields: ITEM_FIELDS })}`, { credential }).catch(() => null);
+        const artists = (data?.Items || []).filter(item => typeOf(item) === 'artist').map(mapListItem);
+        return artists.length ? [{ title: 'Similar artists', items: artists }] : [];
+      },
+      // Tracks that sound like a track (an instant mix from it), nearest first.
+      async similarTracks(trackId) {
+        const data = await api(`/Items/${trackId}/InstantMix?${userQuery(credential, { Limit: '30', Fields: ITEM_FIELDS })}`, { credential }).catch(() => null);
+        return (data?.Items || []).filter(item => item.Id !== trackId && typeOf(item) === 'track').map(track => mapTrack(track));
+      },
+      // The playlists: what is in the server's Playlists folder, of the type Playlist. One may hold music, videos or both.
+      async playlists() {
+        const views = await api(`/UserViews?${userQuery(credential)}`, { credential });
+        const folder = (views.Items || []).find(view => view.CollectionType === 'playlists');
+        if (!folder) return [];
+        const data = await items({ ParentId: folder.Id, IncludeItemTypes: 'Playlist', SortBy: 'SortName', Fields: 'ChildCount,MediaType' });
+        return (data.Items || []).filter(playlist => playlist.Type === 'Playlist').map(playlist => ({
+          ratingKey: playlist.Id, type: 'playlist', title: playlist.Name, thumbnail: thumbnailUrl(playlist, 'Primary', 'square'),
+          leafCount: playlist.ChildCount ?? playlist.RecursiveItemCount,
+        }));
+      },
+      async playlistItems(playlistId) {
+        const data = await api(`/Playlists/${playlistId}/Items?${userQuery(credential, { Fields: 'PrimaryImageAspectRatio' })}`, { credential });
+        // Tracks and videos, in the playlist's order; tracks are numbered by their place in it, not by their number on their
+        // album. (Anything else a playlist can hold, such as a photo, is not played here.)
+        return (data.Items || []).flatMap((item, index) => {
+          const type = typeOf(item);
+          if (type === 'track') return [{ ...mapTrack(item), episode: index + 1, season: undefined }];
+          if (type === 'episode') return [mapHubItem(item)];
+          return type === 'movie' ? [mapListItem(item)] : [];
+        });
+      },
+      // A track's lyrics: Jellyfin keeps one set, timed when its lines carry a start.
+      async lyricTracks(trackId) {
+        const lyrics = await fetchLyrics(trackId);
+        return lyrics.lines.length ? [{ id: '0', label: 'Lyrics', timed: lyrics.timed }] : [];
+      },
+      async lyricText(trackId, id) {
+        if (id !== '0') return null;
+        const lyrics = await fetchLyrics(trackId);
+        return lyrics.lines.length ? lyrics : null;
       },
       // The item's subtitle streams: ones Jellyfin can convert to text are `text`, the
       // rest (picture subtitles such as PGS) can only be drawn into the video.
@@ -665,6 +839,7 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
         const results = [];
         const seen = new Set();
         for (const view of await libraries(credential)) {
+          if (view.type === 'music') continue;
           try {
             const [resume, nextUp] = await Promise.all([
               api(`/UserItems/Resume?${userQuery(credential, { ParentId: view.id, Limit: '12', MediaTypes: 'Video', Fields: ITEM_FIELDS })}`, { credential }),
@@ -742,6 +917,22 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
     };
   }
 
+  // Music: stereo AAC in TS segments, with no video at all.
+  function musicProfile(maxBitrate) {
+    return {
+      Name: PRODUCT_NAME,
+      MaxStreamingBitrate: maxBitrate,
+      MaxStaticBitrate: maxBitrate,
+      DirectPlayProfiles: [],
+      TranscodingProfiles: [{
+        Container: 'ts', Type: 'Audio', AudioCodec: 'aac', Protocol: 'hls',
+        Context: 'Streaming', MaxAudioChannels: '2', MinSegments: 1, BreakOnNonKeyFrames: false,
+      }],
+      CodecProfiles: [],
+      SubtitleProfiles: [],
+    };
+  }
+
   // Rewrite a Jellyfin playlist so every URI goes through /proxy/ and no
   // token ever reaches the browser.
   function rewritePlaylist(text, playlistUrl, playSessionId, server) {
@@ -773,21 +964,25 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
     // A capped server never streams Ultra (1080p, 60 fps), so it stays at 720p
     // or below, with video and audio together under the cap.
     const capKbps = server.maxBitrateKbps;
+    // A track is played as music: sound only, at its own rate.
+    // (If the server will not say, it is a video, as before.)
+    const music = typeOf(await api(`/Items/${itemId}?${userQuery(credential)}`, { credential }).catch(() => null) || {}) === 'track';
     const asked = QUALITY_LEVELS.includes(req.query.quality) ? req.query.quality : 'high';
     const quality = capKbps && asked === 'ultra' ? 'high' : normalizeQuality(asked);
     const tier = { ...qualityTiers(config.plex.videoBitrate)[quality] };
     if (capKbps) tier.videoBitrate = Math.max(300, Math.min(tier.videoBitrate, capKbps - AUDIO_BITRATE / 1000));
     const videoBitrate = tier.videoBitrate * 1000;
+    const musicBitrate = capKbps ? Math.min(MUSIC_BITRATE, Math.max(MUSIC_MIN_BITRATE, capKbps * 1000)) : MUSIC_BITRATE;
     // A chosen subtitle track is drawn into the picture; with none chosen nothing is.
     const subtitle = typeof req.query.subtitle === 'string' && TRACK_ID.test(req.query.subtitle) ? req.query.subtitle : null;
     const params = userQuery(credential, {
-      maxStreamingBitrate: String(videoBitrate + AUDIO_BITRATE), enableDirectPlay: 'false', enableDirectStream: 'false',
+      maxStreamingBitrate: String(music ? musicBitrate : videoBitrate + AUDIO_BITRATE), enableDirectPlay: 'false', enableDirectStream: 'false',
       enableTranscoding: 'true', autoOpenLiveStream: 'false', mediaSourceId: itemId, startTimeTicks: '0',
       ...(subtitle ? { subtitleStreamIndex: subtitle } : {}),
     });
     const info = await api(`/Items/${itemId}/PlaybackInfo?${params}`, {
       credential, method: 'POST', timeoutMs: 15000,
-      body: { DeviceProfile: deviceProfile(quality, tier, videoBitrate + AUDIO_BITRATE) },
+      body: { DeviceProfile: music ? musicProfile(musicBitrate) : deviceProfile(quality, tier, videoBitrate + AUDIO_BITRATE) },
     });
     const source = info?.MediaSources?.[0];
     const playSessionId = info?.PlaySessionId;
@@ -805,11 +1000,21 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
     const master = new URL(transcodingPath, `${server.url}/`);
     for (const key of [...master.searchParams.keys()]) if (/^api_?key$/i.test(key)) master.searchParams.delete(key);
     master.searchParams.set('DeviceId', credential.deviceId);
-    master.searchParams.set('VideoBitrate', String(videoBitrate));
-    master.searchParams.set('AudioBitrate', String(AUDIO_BITRATE));
+    if (music) {
+      master.searchParams.set('AudioBitrate', String(musicBitrate));
+      // The older car screen plays only 48 kHz; the newer one asks (rate=source) for the track's own.
+      if (req.query.rate === 'source') master.searchParams.delete('AudioSampleRate');
+      else master.searchParams.set('AudioSampleRate', MUSIC_SAMPLE_RATE);
+    } else {
+      master.searchParams.set('VideoBitrate', String(videoBitrate));
+      master.searchParams.set('AudioBitrate', String(AUDIO_BITRATE));
+    }
     // Subtitles are only drawn into the picture when the viewer chose a track that
     // can't be shown as text, because that costs transcoding.
-    if (subtitle) {
+    if (music) {
+      master.searchParams.delete('SubtitleStreamIndex');
+      master.searchParams.delete('SubtitleMethod');
+    } else if (subtitle) {
       master.searchParams.set('SubtitleStreamIndex', subtitle);
       master.searchParams.set('SubtitleMethod', 'Encode');
     } else {
@@ -817,7 +1022,7 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
       master.searchParams.delete('SubtitleMethod');
     }
 
-    const active = { source: id, sessionId: playSessionId, itemId, accessToken: credential.accessToken, deviceId: credential.deviceId, serverUrl: credential.serverUrl };
+    const active = { source: id, sessionId: playSessionId, itemId, accessToken: credential.accessToken, deviceId: credential.deviceId, serverUrl: credential.serverUrl, ...(music ? { kind: 'music' } : {}) };
     state.active = active;
     // Shows up as "now playing" in Jellyfin; progress reports follow from the player.
     request('/Sessions/Playing', { credential, method: 'POST', body: { ItemId: itemId, MediaSourceId: source.Id, PlaySessionId: playSessionId, PlayMethod: 'Transcode', CanSeek: true } })

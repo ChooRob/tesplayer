@@ -215,8 +215,9 @@ test('a shuffled queue that repeats all is mixed again at the end, before it goe
   const orders = new Set(Array.from({ length: 30 }, () => reshuffledForRepeat(atEnd()).items.map(item => item.ratingKey).join()));
   assert.ok(orders.size > 10, `${orders.size} different orders in 30 tries`);
   // A fixed random that would put the one just played first still does not open on it.
-  const stubborn = reshuffledForRepeat(atEnd(), () => 0.999);
-  assert.notEqual(stubborn.items[0].ratingKey, atEnd().items[7].ratingKey);
+  const last = atEnd();
+  const stubborn = reshuffledForRepeat(last, () => 0.999);
+  assert.notEqual(stubborn.items[0].ratingKey, last.items[7].ratingKey);
 });
 
 test('only a shuffled queue repeating all at its end is mixed again; anything else is left as it was', () => {
@@ -233,4 +234,11 @@ test('only a shuffled queue repeating all at its end is mixed again; anything el
   // Turning shuffle off afterwards still puts the original order back, since each keeps its place in it.
   const mixed = reshuffledForRepeat(withIndex(make({ shuffle: true, repeat: 'all' }), 5));
   assert.deepEqual(unshuffleQueue(mixed).items.map(item => item.ratingKey), films.map(item => item.ratingKey));
+});
+
+test('a queue remembers which of its entries are videos, so a playlist can hold both', async () => {
+  const { createQueue } = await import('../public/music-queue.js');
+  const queue = createQueue({ items: [{ ratingKey: '1', type: 'track', title: 'Song' }, { ratingKey: '2', type: 'movie', title: 'Film' }, { ratingKey: '3', type: 'episode', title: 'Pilot' }] });
+  assert.deepEqual(queue.items.map(item => item.video), [undefined, true, true]);
+  assert.equal('video' in queue.items[0], false, 'a track carries no flag');
 });

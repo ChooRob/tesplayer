@@ -244,6 +244,19 @@ test('Plex playlists are bounded at stream start and in the media proxy', async 
   }
 });
 
+test('a browser that can take a track at its own sample rate is not made to take 48 kHz', async () => {
+  const cookie = await signIn();
+  const started = await request('/api/start?key=7&quality=low&playbackId=music-source-rate&rate=source', { cookie });
+  assert.equal(started.status, 200, started.text);
+  const decision = callsTo('/music/:/transcode/universal/decision').at(-1);
+  const profile = decision.url.searchParams.get('X-Plex-Client-Profile-Extra');
+  assert.match(profile, /type=musicProfile&context=streaming&protocol=hls&container=mpegts&audioCodec=aac/, 'still audio only, as AAC over HLS');
+  assert.doesNotMatch(profile, /samplingRate/);
+  // Only the exact word counts.
+  await request('/api/start?key=7&quality=low&playbackId=music-other-rate&rate=anything', { cookie });
+  assert.match(callsTo('/music/:/transcode/universal/decision').at(-1).url.searchParams.get('X-Plex-Client-Profile-Extra'), /list=48000/);
+});
+
 test('a track plays through Plex\'s music transcoder, as audio only, and is stopped there', async () => {
   const cookie = await signIn();
   const started = await request('/api/start?key=7&quality=low&playbackId=music-play', { cookie });

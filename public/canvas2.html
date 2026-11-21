@@ -59,6 +59,9 @@
     .settingsActions button { min-height: 44px; padding: 10px 18px; border: 0; border-radius: 8px; color: white; background: #41434c; font-size: 15px; cursor: pointer; }
     #applyPlayback { background: #0878e6; }
     #dimLayer { position: fixed; inset: 0; background: #000; opacity: 0; pointer-events: none; }
+    /* Dim darkens the picture behind the bars. Music has no picture, and its screen sits above everything, so dimming
+       only what is behind it left the panels bright inside a dark box: there it dims the whole screen. */
+    body:has(#musicCover:not([hidden])) #dimLayer { z-index: 5; }
     /* Music has no picture, so the screen is a music player: the cover and what is playing on the
        left, the album's tracks on the right with the one playing lit and the ones before it dimmed.
        It sits between the top bar and the controls, above the overlay so the list can be tapped. */
@@ -143,6 +146,10 @@
     html.moving canvas, html.moving #standardVideo, html.moving #stillImage { cursor: move; }
     html.moving #overlay { pointer-events: none; }
     html.moving #topBar, html.moving #controls { pointer-events: auto; }
+    /* The music screen (z-index 5) is above the whole overlay, so the adjustments and captions panels, which open
+       upward over it, were under its queue and lyrics and got none of the taps. While one is open the overlay goes
+       above the music screen, so the panel can be used and a tap anywhere else closes it. */
+    body:has(#dimPanel:not([hidden])) #overlay, body:has(#ccPanel:not([hidden])) #overlay { z-index: 6; }
     #dimPanel, #ccPanel {
       position: absolute; right: 20px; bottom: calc(100% - 8px);
       display: flex; flex-direction: column; gap: 10px;
@@ -459,12 +466,12 @@
           <input id="volumeLevel" type="range" min="0" max="400" step="5" value="100" aria-describedby="volumeValue">
           <span id="volumeValue" class="pictureValue">100%</span>
         </div>
-        <div class="pictureRow">
+        <div class="pictureRow" id="sizeRow">
           <label for="sizeLevel">Size</label>
           <input id="sizeLevel" type="range" min="40" max="100" step="5" value="100" aria-describedby="sizeValue">
           <span id="sizeValue" class="pictureValue">100%</span>
         </div>
-        <div class="pictureRow">
+        <div class="pictureRow" id="moveRow">
           <button id="moveBtn" type="button" aria-pressed="false" title="Drag the picture to move it"><span data-icon="move"></span> Move</button>
           <button id="resetPicture" type="button">Reset</button>
         </div>
@@ -537,12 +544,12 @@
         document.documentElement.classList.add('music');
         const $ = (name) => document.getElementById(name);
         const sub = [track.artist, track.album].filter(Boolean).join(' · ');
-        $('musicCoverImg').src = track.thumbnail || '';
+        showArt($('musicCoverImg'), track.thumbnail, track.album || track.title);
         $('musicCoverTitle').textContent = track.title;
         $('musicCoverSub').textContent = sub;
         $('titleDisplay').textContent = track.artist ? `${track.artist} — ${track.title}` : track.title;
         $('musicQueueAlbum').textContent = saved.label || track.album || '';
-        $('musicQueueLabel').textContent = `${saved.shuffled ? 'Shuffled' : 'Playing from'} · ${saved.items.length} tracks`;
+        $('musicQueueLabel').textContent = `${saved.shuffled ? 'Shuffled' : 'Playing from'} · ${saved.items.length} ${saved.items.some((item) => item.video) ? 'items' : 'tracks'}`;
         const clock = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
         const from = Math.max(0, at - 20);
         const rows = saved.items.slice(from, at + 60).map((item, offset) => {
@@ -597,6 +604,9 @@
     import { CENTERED, normalizePicture, readPicture, savePicture } from '/picture-layout.js';
     import { normalizeVolume, readVolume, saveVolume, VOLUME_KEY, MUSIC_VOLUME_KEY } from '/volume-level.js';
     import { waitForServer } from '/engine/server-wait.js';
+    import { useSourceRate, isMcu3, thisDevice } from '/engine/device.js';
+    import { showArt } from '/artwork.js';
+    import { MUSIC_SESSION_KEY } from '/saved-music.js';
     hydrateIcons();
     import { createQuotaGuard } from '/engine/quota-guard.js';
     import { createPlaybackBanner } from '/playback-banner.js';
@@ -611,6 +621,8 @@
       }
     }).catch(() => console.error('Could not load player extensions'));
 
+    // A play queue is music (a film's queue is `videoQueue`).
+    const musicPage = new URLSearchParams(location.search).has('queue');
     setupFullscreenButton(document.getElementById('fullscreenBtn'), {
       video: document.getElementById('standardVideo'),
       getPlaybackState: () => {
@@ -619,6 +631,9 @@
         return { currentTime: player.clock.currentTime, paused: player.state === 'paused' };
       },
     });
+    // Not for music: its fullscreen way (leaving the page and coming back) takes the car's browser down with it.
+    // `hidden` wins over the button's own display, which the fullscreen code sets.
+    if (musicPage) document.getElementById('fullscreenBtn').hidden = true;
 
     const debugEl = document.getElementById('debug');
     const log = (msg) => {
@@ -735,7 +750,7 @@
           if (await waitForServer({ cancelled: () => leaving, timeoutMs: 15000 }) !== 'up') return false;
           discardNextPlan();
           const id = newPlaybackId();
-          const params = new URLSearchParams({ quality: currentQuality, playbackId: id, key: itemKey });
+          const params = musicStartParams({ quality: currentQuality, playbackId: id, key: itemKey });
           await player.load(`/api/start?${params}`, { readAheadSeconds: MUSIC_READ_AHEAD_SECONDS, readAheadParallelism: MUSIC_READ_AHEAD_PARALLELISM, startTime: at });
           if (Math.abs(player.clock.currentTime - at) > 0.5) await player.seek(at);
           playbackId = id;
@@ -808,7 +823,21 @@
       }
 
       const READ_AHEAD_SECONDS = { low: 60, medium: 30, high: 0 };
-      const MUSIC_READ_AHEAD_SECONDS = 180;
+      // An MCU3 has the memory and the speed to hold much more of a film downloaded, which rides out the car's
+      // connection dropping for a while (a minute of High is about 15 MB, of Ultra about 45). Its limit on what is held
+      // goes up with it.
+      const MCU3_READ_AHEAD_SECONDS = { low: 90, medium: 60, high: 60, ultra: 30 };
+      // An MCU2 is slow, and the page's one thread has little to spare, so only a little: enough to ride out a short
+      // dip at High, which had none (about 2.5 MB). Raise it if the health reports show no extra lag or dropped frames.
+      const MCU2_READ_AHEAD_SECONDS = { ...READ_AHEAD_SECONDS, high: 10 };
+      const MCU3_READ_AHEAD_MAX_BYTES = 48 * 1024 * 1024;
+      // Music is asked for at 48 kHz, for the car's slow browser, unless this one is known not to be it.
+      const musicStartParams = (values) => {
+        const params = new URLSearchParams(values);
+        if (useSourceRate()) params.set('rate', 'source');
+        return params;
+      };
+      const MUSIC_READ_AHEAD_SECONDS = 300;
       // Music segments are about a second long, so on a slow link each request is mostly waiting. Plex makes them
       // one after another as it transcodes, so asking for many at once only queues them behind it: with six at a
       // time they timed out together in bursts, with two they do not.
@@ -1061,10 +1090,14 @@
       const sizeValue = document.getElementById('sizeValue');
       const moveBtn = document.getElementById('moveBtn');
       let picture = readPicture(storage);
+      // Music has no picture to size or move, so those controls go and a size or position saved for films is not
+      // applied to it (it is kept for the next film).
+      if (musicPage) { document.getElementById('sizeRow').hidden = true; document.getElementById('moveRow').hidden = true; }
       function showPicture() {
-        root.style.setProperty('--pic-scale', String(picture.scale));
-        root.style.setProperty('--pic-x', String(picture.x));
-        root.style.setProperty('--pic-y', String(picture.y));
+        const shown = musicPage ? CENTERED : picture;
+        root.style.setProperty('--pic-scale', String(shown.scale));
+        root.style.setProperty('--pic-x', String(shown.x));
+        root.style.setProperty('--pic-y', String(shown.y));
         const percent = Math.round(picture.scale * 100);
         sizeInput.value = String(percent);
         sizeValue.textContent = `${percent}%`;
@@ -1472,7 +1505,8 @@
         const track = queue[index];
         if (!track) return;
         if (queueData) saveQueue(sessionStorage, withIndex(queueData, index));
-        const reload = () => goToItem(track.ratingKey, { queue: queueData?.id });
+        // (A playlist can hold videos among its tracks: each is opened the way it is, as music or as a film.)
+        const reload = () => goToItem(track.ratingKey, { queue: queueData?.id, video: !!track.video });
         if (!queueData) { reload(); return; }
         // Music moves on inside the page; if that cannot be done, the page is loaded afresh as before.
         void skipToTrack(index).then((moved) => { if (!moved && !skipping) reload(); });
@@ -1865,14 +1899,15 @@
         if (wrapsReshuffled(withIndex(queueData, queueIndex))) return;
         const pos = nextPosition(withIndex(queueData, queueIndex), { auto: true });
         const track = pos === null ? null : queueData.items[pos];
-        if (!track) return;
+        // (A video among the tracks is not opened ahead as music.)
+        if (!track || track.video) return;
         const plan = { key: String(track.ratingKey), pos, id: newPlaybackId(), item: null, ready: false };
         nextPlan = plan;
         // While its stream starts, the server is between two streams: report nothing, so neither report is refused.
         setHeartbeatsPaused(true);
         let opened = false;
         try {
-          const params = new URLSearchParams({ quality: currentQuality, playbackId: plan.id, key: plan.key });
+          const params = musicStartParams({ quality: currentQuality, playbackId: plan.id, key: plan.key });
           const [item] = await Promise.all([
             fetch(`/api/library/item/${encodeURIComponent(plan.key)}`, { signal: AbortSignal.timeout(10000) }).then((res) => (res.ok ? res.json() : null)),
             player.prepareNext(`/api/start?${params}`, { readAheadSeconds: MUSIC_READ_AHEAD_SECONDS, readAheadParallelism: MUSIC_READ_AHEAD_PARALLELISM }),
@@ -1938,7 +1973,7 @@
       let skipping = false;
       async function skipToTrack(pos) {
         const track = queueData?.items[pos];
-        if (!track || movingOn || isLive || skipping || !isMusic || selection.mode !== 'canvas' || typeof player?.adoptPrepared !== 'function') return false;
+        if (!track || track.video || movingOn || isLive || skipping || !isMusic || selection.mode !== 'canvas' || typeof player?.adoptPrepared !== 'function') return false;
         skipping = true;
         setHeartbeatsPaused(true);
         // A track that has just played out has already cleared wantsPlayback (finishIfPlayedOut), but moving on
@@ -1953,7 +1988,7 @@
           } else {
             discardNextPlan();
             plan = { key: String(track.ratingKey), pos, id: newPlaybackId(), item: null, ready: true };
-            const params = new URLSearchParams({ quality: currentQuality, playbackId: plan.id, key: plan.key });
+            const params = musicStartParams({ quality: currentQuality, playbackId: plan.id, key: plan.key });
             const [item] = await Promise.all([
               fetch(`/api/library/item/${encodeURIComponent(plan.key)}`, { signal: AbortSignal.timeout(10000) }).then((res) => (res.ok ? res.json() : null)),
               player.load(`/api/start?${params}`, { readAheadSeconds: MUSIC_READ_AHEAD_SECONDS, readAheadParallelism: MUSIC_READ_AHEAD_PARALLELISM }),
@@ -2126,22 +2161,27 @@
         if (queue.length) { goNext({ auto }); return; }
         if (nextEpisode) goToItem(nextEpisode.ratingKey);
       }
-      function goToItem(ratingKey, { queue: queueId = null } = {}) {
+      function goToItem(ratingKey, { queue: queueId = null, video = !isMusic } = {}) {
         if (movingOn || isLive) return;
         nextCountdown.cancel();
         movingOn = true;
         discardNextPlan();
         const target = new URL('/canvas2', location.origin);
         target.searchParams.set('key', ratingKey);
-        if (queueId) target.searchParams.set(isMusic ? 'queue' : 'videoQueue', queueId);
-        if (embedded) target.searchParams.set('embedded', '1');
+        // `queue` means music from the first moment, so a video names its queue apart.
+        if (queueId) target.searchParams.set(video ? 'videoQueue' : 'queue', queueId);
+        // Music held behind the browse screen gives way to a video: the video takes the whole page, and the music kept
+        // for reopening the app is let go (it would come back as background music, where the film now is).
+        const leavesFrame = embedded && video;
+        if (leavesFrame) { try { localStorage.removeItem(MUSIC_SESSION_KEY); } catch { /* nothing kept */ } }
+        if (embedded && !leavesFrame) target.searchParams.set('embedded', '1');
         // Keep where we came from and how the viewer plays; quality is chosen afresh.
         for (const name of ['playback']) {
           if (urlParams.has(name)) target.searchParams.set(name, urlParams.get(name));
         }
         // The next episode may be in another season, so Back goes to the show, not the season.
         carryBrowseView(location.search, target.searchParams, { keepSeason: false });
-        location.replace(target);
+        (leavesFrame ? window.parent.location : location).replace(target);
       }
       playNextBtn.addEventListener('click', () => playNextEpisode());
       cancelNextBtn.addEventListener('click', cancelNextCountdown);
@@ -2151,7 +2191,7 @@
         isMusic = true;
         const artist = item.artist || item.showTitle || '';
         titleDisplayEl.textContent = artist ? `${artist} — ${item.title}` : item.title;
-        document.getElementById('musicCoverImg').src = item.thumbnail || '';
+        showArt(document.getElementById('musicCoverImg'), item.thumbnail, item.album || item.title, item.fallbackThumbnail);
         Object.assign(musicMeta, { title: item.title, artist, album: item.album || '', thumbnail: item.thumbnail || null });
         broadcastMusic(true);
         document.getElementById('musicCoverTitle').textContent = item.title;
@@ -2524,7 +2564,7 @@
           currentQuality = await measureStartupQuality({ url: '/api/playback-speed', timeoutMs: 3000 });
         }
         log(`Loading video at ${currentQuality} quality…`);
-        const startParams = new URLSearchParams({ quality: currentQuality, playbackId });
+        const startParams = queueData ? musicStartParams({ quality: currentQuality, playbackId }) : new URLSearchParams({ quality: currentQuality, playbackId });
         if (itemKey) startParams.set('key', itemKey);
         if (startSubtitle) startParams.set('subtitle', startSubtitle);
         const startUrl = `/api/start?${startParams}`;
@@ -2532,7 +2572,9 @@
         // further ahead whenever it has capacity to spare.
         // Music always reads three minutes ahead (most of a track): its audio is about 2 MB a minute, and without
         // it every segment waits out a full round trip on the car's connection, which drains the buffer.
-        const readAheadSeconds = queueData ? MUSIC_READ_AHEAD_SECONDS : READ_AHEAD_SECONDS[currentQuality] || 0;
+        const filmReadAhead = { mcu3: MCU3_READ_AHEAD_SECONDS, mcu2: MCU2_READ_AHEAD_SECONDS }[thisDevice()] || READ_AHEAD_SECONDS;
+        const readAheadSeconds = queueData ? MUSIC_READ_AHEAD_SECONDS : filmReadAhead[currentQuality] || 0;
+        const readAheadMaxBytes = !queueData && isMcu3() ? MCU3_READ_AHEAD_MAX_BYTES : undefined;
         const readAheadParallelism = queueData ? MUSIC_READ_AHEAD_PARALLELISM : undefined;
         const startTime = resumeSeconds;
         // Say so rather than leave the spinner running when the stream never starts.
@@ -2541,14 +2583,14 @@
           return error;
         };
         try {
-          await player.load(startUrl + (directAttempt ? '&direct=1' : ''), { direct: directAttempt, readAheadSeconds, readAheadParallelism, startTime });
+          await player.load(startUrl + (directAttempt ? '&direct=1' : ''), { direct: directAttempt, readAheadSeconds, readAheadMaxBytes, readAheadParallelism, startTime });
         } catch (error) {
           if (await rejectBlockedPlayback(error)) return;
           if (!directAttempt) throw failedToStart(error);
           directAttempt = false;
           showBanner('Direct connection unavailable — using server relay');
           waitingForServer = false; // that banner replaced the waiting one; the relay may have its own wait to show
-          try { await player.load(startUrl, { readAheadSeconds, readAheadParallelism, startTime }); }
+          try { await player.load(startUrl, { readAheadSeconds, readAheadMaxBytes, readAheadParallelism, startTime }); }
           catch (fallbackError) {
             if (await rejectBlockedPlayback(fallbackError)) return;
             throw failedToStart(fallbackError);

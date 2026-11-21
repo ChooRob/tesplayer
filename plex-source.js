@@ -231,10 +231,13 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
 
   // A track is transcoded by Plex's music endpoint, which wants a bitrate and a profile that
   // allows audio-only HLS (the same request Plex Web makes). The tier sets how much to send.
-  // Always 48 kHz: a car's audio hardware runs at 48 kHz, and a 44.1 kHz stream is resampled live by
-  // its slow browser, which stutters (MCU2). Plex does the conversion instead.
+  // 48 kHz unless the browser says it can take the track as it is: a car's audio hardware runs at 48 kHz, and a
+  // 44.1 kHz stream is resampled live by its slow browser, which stutters (MCU2). Plex does the conversion
+  // instead. (The page works out whether it is one; see public/engine/audio-rate.js.)
   const MUSIC_BITRATE_KBPS = { ultra: 320, high: 256, medium: 192, low: 128 };
-  function plexMusicParams(path, session, quality = 'high') {
+  const MUSIC_TARGET = 'add-transcode-target(type=musicProfile&context=streaming&protocol=hls&container=mpegts&audioCodec=aac)';
+  const MUSIC_48K = '+add-limitation(scope=musicCodec&scopeName=aac&type=match&name=audio.samplingRate&list=48000&replaceAudioCodec=aac)';
+  function plexMusicParams(path, session, quality = 'high', { sourceRate = false } = {}) {
     return new URLSearchParams({
       hasMDE: '1',
       path,
@@ -247,7 +250,7 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
       musicBitrate: String(MUSIC_BITRATE_KBPS[normalizeQuality(quality)]),
       mediaBufferSize: '12288',
       session,
-      'X-Plex-Client-Profile-Extra': 'add-transcode-target(type=musicProfile&context=streaming&protocol=hls&container=mpegts&audioCodec=aac)+add-limitation(scope=musicCodec&scopeName=aac&type=match&name=audio.samplingRate&list=48000&replaceAudioCodec=aac)',
+      'X-Plex-Client-Profile-Extra': sourceRate ? MUSIC_TARGET : MUSIC_TARGET + MUSIC_48K,
     });
   }
 
@@ -264,7 +267,7 @@ export async function createPlexSource({ id = 'plex', config, plugins, store, pi
     const kind = (await libraryFor(token, plexUrl).itemDetails(itemId).catch(() => null))?.type === 'track' ? 'music' : 'video';
     timing.details = performance.now();
     const params = kind === 'music'
-      ? plexMusicParams(`/library/metadata/${itemId}`, sessionId, qualityTierFor(req.query.quality))
+      ? plexMusicParams(`/library/metadata/${itemId}`, sessionId, qualityTierFor(req.query.quality), { sourceRate: req.query.rate === 'source' })
       : plexTranscodeParams(`/library/metadata/${itemId}`, sessionId, qualityTierFor(req.query.quality), subtitle);
 
     const decisionRes = await fetch(`${plexUrl}/${kind}/:/transcode/universal/decision?${params}`, {
