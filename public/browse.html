@@ -27,7 +27,18 @@
     .toolbar { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
     /* One row of tabs, however many there are: it scrolls sideways, and fades at an edge that has more behind it
        (see updateTabFades). It takes what the search box leaves, so it can shrink to fit. */
-    .libraries { display: flex; gap: 8px; flex-wrap: nowrap; flex: 1 1 0; min-width: 0; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+    .tabsWrap { position: relative; display: flex; flex: 1 1 0; min-width: 0; }
+    .libraries { display: flex; gap: 8px; flex-wrap: nowrap; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+    /* Arrows at the ends of the tab row, for a mouse (a finger just swipes); each shows only when there is more that way. */
+    .tabArrow {
+      position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 38px; height: 38px; border-radius: 50%;
+      background: rgba(20,20,20,0.85); color: #fff; border: 1px solid #555; cursor: pointer; padding: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .tabArrow:active { background: rgba(10,132,255,0.85); border-color: #0a84ff; }
+    .tabArrow[hidden] { display: none; }
+    .tabArrow.prev { left: 2px; }
+    .tabArrow.next { right: 2px; }
     .libraries::-webkit-scrollbar { display: none; }
     .libraries.fadeEnd { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent); }
     .libraries.fadeStart { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 44px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 44px), transparent); }
@@ -310,7 +321,11 @@
     Canvas playback is turned off, so videos use the standard player. In a Tesla, video only plays while parked.
   </div>
   <div class="toolbar">
-    <div class="libraries" id="libraries"></div>
+    <div class="tabsWrap">
+      <button type="button" class="tabArrow prev" id="tabsPrev" aria-label="Scroll tabs left" hidden><span data-icon="chevron-left"></span></button>
+      <div class="libraries" id="libraries"></div>
+      <button type="button" class="tabArrow next" id="tabsNext" aria-label="Scroll tabs right" hidden><span data-icon="chevron-right"></span></button>
+    </div>
     <form id="searchForm">
       <span id="searchBox">
         <input id="searchInput" type="search" placeholder="Search…" />
@@ -437,11 +452,20 @@
     const librariesEl = document.getElementById('libraries');
     // Tabs that do not all fit scroll sideways. An edge with more behind it fades out, so it is clear the row goes on, and
     // the tab on screen is kept in view (a saved address can open on one far along).
+    const tabsPrev = document.getElementById('tabsPrev');
+    const tabsNext = document.getElementById('tabsNext');
     function updateTabFades() {
       const room = librariesEl.scrollWidth - librariesEl.clientWidth;
-      librariesEl.classList.toggle('fadeStart', librariesEl.scrollLeft > 4);
-      librariesEl.classList.toggle('fadeEnd', room > 4 && librariesEl.scrollLeft < room - 4);
+      const before = librariesEl.scrollLeft > 4;
+      const after = room > 4 && librariesEl.scrollLeft < room - 4;
+      librariesEl.classList.toggle('fadeStart', before);
+      librariesEl.classList.toggle('fadeEnd', after);
+      tabsPrev.hidden = !before;
+      tabsNext.hidden = !after;
     }
+    // A step is most of what is on screen, so a tab seen at the edge stays in sight.
+    tabsPrev.addEventListener('click', () => librariesEl.scrollBy({ left: -librariesEl.clientWidth * 0.8, behavior: 'smooth' }));
+    tabsNext.addEventListener('click', () => librariesEl.scrollBy({ left: librariesEl.clientWidth * 0.8, behavior: 'smooth' }));
     function revealActiveTab() {
       const tab = librariesEl.querySelector('button.active');
       if (tab) {
@@ -453,6 +477,8 @@
       }
       updateTabFades();
     }
+    // Once the fonts are in, the tabs have their real widths: look again at where the chosen one is.
+    document.fonts?.ready.then(revealActiveTab);
     librariesEl.addEventListener('scroll', updateTabFades, { passive: true });
     window.addEventListener('resize', updateTabFades);
     // Tabs coming and going, and a search's counts widening them, change how far the row goes.
@@ -581,6 +607,8 @@
       detailHeaderEl.style.display = 'none';
       pageHeaderEl.style.display = '';
       toolbarEl.style.display = '';
+      // A hidden element forgets how far it was scrolled, so the row comes back at its start: find the chosen tab again.
+      revealActiveTab();
     }
 
     // Render show metadata, optionally using the season’s poster.
