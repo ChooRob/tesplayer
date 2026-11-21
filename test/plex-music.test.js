@@ -55,6 +55,7 @@ const answers = {
   ] } },
   '/albums': { MediaContainer: { totalSize: 3, Metadata: [ALBUM] } },
   '/tracks': { MediaContainer: { totalSize: 120, Metadata: [TRACK] } },
+  '/library/sections/5/genre': { MediaContainer: { Directory: [{ key: '31', title: 'Rock' }, { key: '30', title: 'Jazz' }] } },
   '/hubs/search': { MediaContainer: { Hub: [{ Metadata: [ARTIST, ALBUM, TRACK] }] } },
 };
 const originalFetch = globalThis.fetch;
@@ -78,8 +79,29 @@ const squareThumb = key => sized(key, 320);
 test('a music library is a "music" library, whatever Plex calls it', async () => {
   assert.deepEqual(await library.libraries(), [
     { id: '1', title: 'Movies', type: 'movie' },
-    { id: '5', title: 'Music', type: 'music', views: [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }] },
+    { id: '5', title: 'Music', type: 'music', views: [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }, { id: 'genres', label: 'Genres' }] },
   ]);
+});
+
+test('a music library with no genres does not offer the Genres view', async () => {
+  const key = '/library/sections/5/genre';
+  const had = answers[key];
+  answers[key] = { MediaContainer: { Directory: [] } };
+  try {
+    const music = (await library.libraries()).find((entry) => entry.id === '5');
+    assert.deepEqual(music.views.map((view) => view.id), ['artists', 'albums', 'tracks']);
+  } finally { answers[key] = had; }
+});
+
+test('a music library lists its genres by name, and the albums of one genre', async () => {
+  const { total, items } = await library.libraryItems('5', { view: 'genres' });
+  assert.equal(total, 2);
+  assert.deepEqual(items.map((item) => [item.type, item.ratingKey, item.title]), [['genre', '30', 'Jazz'], ['genre', '31', 'Rock']]);
+  assert.ok(asked.some((path) => path === '/library/sections/5/genre?type=9'));
+  await library.libraryItems('5', { view: 'albums', genre: '30' });
+  assert.ok(asked.some((path) => path.startsWith('/library/sections/5/all?') && path.includes('type=9') && path.includes('genre=30')));
+  await library.libraryItems('5', { view: 'tracks', genre: '30' });
+  assert.ok(asked.some((path) => path.includes('type=10') && path.includes('album.genre=30')), 'the tracks of a genre are those of its albums');
 });
 
 test('artists are listed with square art', async () => {
@@ -497,7 +519,7 @@ test('music keeps playing while you browse: the player sits in a frame, with a b
   assert.match(browse, /musicHost\.stop\(\); \/\/ a plugin's tab/, 'and so does a plugin tab such as Live TV');
   assert.match(browse, /fromFrame\(event, frame\?\.contentWindow, location\.origin\)/, 'only its own frame is listened to');
   assert.match(browse, /cleanState\(event\.data\)/);
-  assert.match(browse, /els\.title\.textContent = state\.title/, 'text, never markup');
+  assert.match(browse, /els\.title\.textContent = shown\.title/, 'text, never markup');
   // the player
   assert.match(player, /const embedded = window\.parent !== window && new URLSearchParams\(location\.search\)\.get\('embedded'\) === '1';/);
   assert.match(player, /if \(embedded\) \{ window\.parent\.postMessage\(\{ type: MUSIC_MESSAGE, event: 'minimize' \}, location\.origin\); return; \}/, '"Browse" only shrinks it');
@@ -579,8 +601,9 @@ test('the minimized bar shows the time and the play button follows what the play
   const browse = readFileSync(new URL('../public/browse.html', import.meta.url), 'utf8');
   const canvas = readFileSync(new URL('../public/canvas2.html', import.meta.url), 'utf8');
   assert.match(browse, /id="playbarTime"/);
-  assert.match(browse, /els\.time\.textContent = state\.duration \? `\$\{clockOf\(state\.position\)\} \/ \$\{clockOf\(state\.duration\)\}` : ''/);
-  assert.match(browse, /const playing = state\.playing;/);
+  assert.match(browse, /els\.time\.textContent = shown\.duration \? `\$\{clockOf\(shown\.position\)\} \/ \$\{clockOf\(shown\.duration\)\}` : ''/);
+  assert.match(browse, /const playing = shown\.playing;/);
+  assert.match(browse, /els\.play\.classList\.toggle\('busy', busy\)/, 'a spinner while loading or buffering, also before the player has reported');
   assert.match(canvas, /playing: player\?\.wantsPlayback === true/);
 });
 

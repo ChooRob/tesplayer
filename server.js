@@ -425,7 +425,7 @@ app.post('/api/playback/canvas-health', rateLimit({ maximum: 12, windowMs: 60000
     || !['loading', 'paused', 'playing', 'buffering', 'ended', 'error'].includes(body.state)) return res.status(400).end();
   const fields = ['mediaTime', 'videoTime', 'videoQueueLength', 'videoDecodeCount', 'videoRenderCount',
     'videoDropCount', 'audioAvailableSeconds', 'audioUnderrunCount', 'audioConsumedFrames', 'audioPacketCount',
-    'audioDecodeWaitMs', 'audioWriteWaitMs', 'heapBytes',
+    'audioDecodeWaitMs', 'audioWriteWaitMs', 'heapBytes', 'lifecycleAgeSeconds',
     'segmentCount', 'segmentBytes', 'segmentFetchMs', 'segmentSlowestMs'];
   if (PLAYBACK_DIAGNOSTICS) {
     fields.push('audioSampleRate', 'audioBaseLatency', 'audioOutputLatency', 'audioResumeMs', 'audioGain', 'audioLimiterOn', 'audioResumeTimeouts',
@@ -443,6 +443,11 @@ app.post('/api/playback/canvas-health', rateLimit({ maximum: 12, windowMs: 60000
   if (PLAYBACK_DIAGNOSTICS && typeof body.mediaActionLog === 'string'
     && /^[a-z]{1,16}:[a-z]{1,10}:\d{1,4}\.\d(,[a-z]{1,16}:[a-z]{1,10}:\d{1,4}\.\d){0,11}$/.test(body.mediaActionLog)) {
     metrics.mediaActionLog = body.mediaActionLog;
+  }
+  // A page lifecycle event (freeze, resume, hidden, visible, pagehide, or a previous page that never left cleanly).
+  if (PLAYBACK_DIAGNOSTICS && body.lifecycle != null) {
+    if (!['freeze', 'resume', 'hidden', 'visible', 'pagehide', 'previous-unclean'].includes(body.lifecycle)) return res.status(400).end();
+    metrics.lifecycle = body.lifecycle;
   }
   if (body.audioContextState != null) {
     if (!['none', 'suspended', 'running', 'closed', 'interrupted'].includes(body.audioContextState)) return res.status(400).end();
@@ -590,6 +595,8 @@ library.get('/library/:id', libraryRoute((lib, req) => lib.libraryItems(req.para
   view: typeof req.query.view === 'string' && LIST_VIEW.test(req.query.view) ? req.query.view : undefined,
   start: whole(req.query.start, 1_000_000),
   size: whole(req.query.size, 1000) || undefined,
+  // Only the albums of one genre (a music library's genre ID, as its `genres` view lists them).
+  genre: typeof req.query.genre === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(req.query.genre) ? req.query.genre : undefined,
 })));
 library.get('/library/:id/recentlyadded', libraryRoute((lib, req) => lib.recentlyAdded(req.params.id)));
 library.get('/show/:id/episodes', libraryRoute((lib, req) => lib.showEpisodes(req.params.id)));

@@ -13,7 +13,7 @@ test('the fallback is a blue tile that names the title, with its text escaped', 
   const uri = fallbackArt('A & "B" <3');
   assert.ok(uri.startsWith('data:image/svg+xml'));
   const svg = decodeURIComponent(uri.split(',')[1]);
-  assert.match(svg, /#3b82f6/);
+  assert.match(svg, /#1f4a8a/);
   assert.match(svg, /A &amp; &quot;B&quot; &lt;3/);
 });
 

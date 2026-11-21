@@ -1271,6 +1271,52 @@
           signal: AbortSignal.timeout(5000),
         }).catch(() => {}).finally(() => { canvasHealthInFlight = false; });
       }
+      // Page lifecycle, for the health log. A page that crashes ("Aw, Snap") can say nothing as it goes, so each report
+      // also leaves a note in localStorage that is marked clean when the page is left in the ordinary way; the next page
+      // to load finding one not marked clean reports it, with what that page last saw.
+      // Each page keeps its own note, so a second player in another tab is not taken for a crash of the first.
+      const PAGE_KEY_PREFIX = 'freeStuffCrazyPlayer.page.';
+      const PAGE_NOTE_KEY = PAGE_KEY_PREFIX + playbackId;
+      function sendLifecycle(event, extra = {}) {
+        if (selection.mode !== 'canvas') return;
+        const stats = lastCanvasStats || {};
+        const body = { playbackId, live: isLive, quality: currentQuality, state: stats.state || 'loading', lifecycle: event, ...extra };
+        if (!extra.previous) for (const name of ['mediaTime', 'videoDropCount', 'videoRenderCount', 'videoQueueLength']) if (Number.isFinite(stats[name])) body[name] = stats[name];
+        try {
+          fetch('/api/playback/canvas-health', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: true, signal: AbortSignal.timeout(5000) }).catch(() => {});
+        } catch { /* diagnostics only */ }
+      }
+      function noteThisPage() {
+        try {
+          const stats = lastCanvasStats || {};
+          localStorage.setItem(PAGE_NOTE_KEY, JSON.stringify({ playbackId, at: Date.now(), quality: currentQuality, mediaTime: stats.mediaTime, videoDropCount: stats.videoDropCount, videoRenderCount: stats.videoRenderCount, videoQueueLength: stats.videoQueueLength, heapBytes: performance.memory?.usedJSHeapSize }));
+        } catch { /* storage unavailable */ }
+      }
+      // Started once the server says diagnostics are on (a development server).
+      function startLifecycleLogging() {
+        try {
+          // A note not touched for a while belongs to a page that is gone without having left cleanly (a page that is
+          // open refreshes its note every 3 seconds, and one that leaves cleanly removes it).
+          for (let i = localStorage.length - 1; i >= 0; i--) {
+            const key = localStorage.key(i);
+            if (!key || !key.startsWith(PAGE_KEY_PREFIX) || key === PAGE_NOTE_KEY) continue;
+            const before = JSON.parse(localStorage.getItem(key) || 'null');
+            if (!before || Date.now() - before.at < 20000) continue;
+            localStorage.removeItem(key);
+            if (typeof before.playbackId !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(before.playbackId)) continue;
+            const body = { playbackId: before.playbackId, live: false, state: 'error', lifecycle: 'previous-unclean', lifecycleAgeSeconds: Math.max(0, Math.round((Date.now() - before.at) / 1000)), error: 'page ended without leaving cleanly' };
+            for (const name of ['mediaTime', 'videoDropCount', 'videoRenderCount', 'videoQueueLength', 'heapBytes']) if (Number.isFinite(before[name])) body[name] = before[name];
+            if (typeof before.quality === 'string') body.quality = before.quality;
+            fetch('/api/playback/canvas-health', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: true, signal: AbortSignal.timeout(5000) }).catch(() => {});
+          }
+        } catch { /* nothing kept, or not readable */ }
+        noteThisPage();
+        setInterval(noteThisPage, 3000);
+        document.addEventListener('freeze', () => sendLifecycle('freeze'));
+        document.addEventListener('resume', () => sendLifecycle('resume'));
+        document.addEventListener('visibilitychange', () => sendLifecycle(document.visibilityState === 'hidden' ? 'hidden' : 'visible'));
+        window.addEventListener('pagehide', () => { try { localStorage.removeItem(PAGE_NOTE_KEY); } catch { /* storage unavailable */ } sendLifecycle('pagehide'); });
+      }
       if (selection.mode === 'canvas') {
         const healthTimer = setInterval(reportCanvasHealth, 15000);
         // Outside production the server also keeps audio-output details; report
@@ -1278,6 +1324,7 @@
         // (the server accepts 12 reports a minute).
         fetch('/api/playback/diagnostics').then(res => (res.ok ? res.json() : null)).then(info => {
           if (!info?.enabled) return;
+          startLifecycleLogging();
           clearInterval(healthTimer);
           setInterval(reportCanvasHealth, 6000);
         }).catch(() => {});

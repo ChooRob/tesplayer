@@ -41,6 +41,7 @@ async function fakeEmby(input, init = {}) {
     AlbumArtist: 'The Band', AlbumArtists: [{ Id: 501, Name: 'The Band' }], ArtistItems: [{ Id: 501, Name: 'The Band' }], RunTimeTicks: 2_000_000_000, UserData: {}, ImageTags: {} };
   // Emby refuses a field its playlist call does not list.
   if (url.pathname === '/Playlists/700/Items') return url.searchParams.get('Fields') === 'PrimaryImageAspectRatio' ? json({ TotalRecordCount: 3, Items: [track, { Id: 909, Name: 'A Movie', Type: 'Movie', ProductionYear: 2009, RunTimeTicks: 36_000_000_000, ImageTags: { Primary: 'x' }, UserData: {} }, { Id: 910, Name: 'Photo', Type: 'Photo' }] }) : json({}, 400);
+  if (url.pathname === '/MusicGenres') return json({ TotalRecordCount: 1, Items: [{ Id: 77, Name: 'Rock', SortName: 'rock' }] });
   if (url.pathname === '/Artists/AlbumArtists') return json({ TotalRecordCount: 1, Items: [artist] });
   if (url.pathname === '/Items/501/Similar') return json({ Items: [{ ...artist, Id: 600, Name: 'Another Band' }] });
   if (url.pathname === '/Items/503/InstantMix') return json({ Items: [track, { ...track, Id: 504, Name: 'Next Song' }] });
@@ -115,7 +116,7 @@ const library = read => async (req, res) => { try { res.json(await read(source.l
 app.get('/lib/libraries', library(lib => lib.libraries()));
 app.get('/lib/items/:id', library((lib, req) => lib.libraryItems(req.params.id, {})));
 app.get('/lib/item/:id', library((lib, req) => lib.itemDetails(req.params.id)));
-app.get('/lib/call/:method/:id', library((lib, req) => lib[req.params.method](req.params.id, { view: req.query.view, start: Number(req.query.start) || undefined, size: Number(req.query.size) || undefined })));
+app.get('/lib/call/:method/:id', library((lib, req) => lib[req.params.method](req.params.id, { view: req.query.view, genre: req.query.genre, start: Number(req.query.start) || undefined, size: Number(req.query.size) || undefined })));
 app.get('/lib/playlists', library(lib => lib.playlists()));
 app.get('/lib/playlist/:id', library((lib, req) => lib.playlistItems(req.params.id)));
 app.get('/lib/tracks/:id', library((lib, req) => lib.subtitleTracks(req.params.id)));
@@ -168,7 +169,7 @@ test('a wrong password is refused and a right one signs in without exposing the 
 });
 
 test('libraries and items are shaped like the other sources', async () => {
-  assert.deepEqual(await (await send('/lib/libraries')).json(), [{ id: '3', title: 'Movies', type: 'movie' }, { id: '9', title: 'Music', type: 'music', views: [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }] }, { id: '5', title: 'Home', type: 'video' }, { id: '6', title: 'Clips', type: 'video' }]);
+  assert.deepEqual(await (await send('/lib/libraries')).json(), [{ id: '3', title: 'Movies', type: 'movie' }, { id: '9', title: 'Music', type: 'music', views: [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }, { id: 'genres', label: 'Genres' }] }, { id: '5', title: 'Home', type: 'video' }, { id: '6', title: 'Clips', type: 'video' }]);
   const { total, items } = await (await send('/lib/items/3')).json();
   assert.equal(total, 1);
   assert.deepEqual(items[0], {
@@ -285,6 +286,15 @@ test('a music library lists artists, albums and tracks, and opens artist to albu
   assert.equal(calls.findLast(call => call.path === '/Artists/AlbumArtists').params.get('Limit'), '500');
   const albums = await get('/lib/call/libraryItems/9?view=albums');
   assert.deepEqual([albums.items[0].type, albums.items[0].showRatingKey, albums.items[0].showTitle], ['album', '501', 'The Band']);
+  const genres = await get('/lib/call/libraryItems/9?view=genres');
+  assert.deepEqual([genres.total, genres.items[0].type, genres.items[0].title, genres.items[0].ratingKey], [1, 'genre', 'Rock', '77']);
+  await get('/lib/call/libraryItems/9?view=albums&genre=77');
+  assert.equal(calls.findLast(call => call.path === `/Users/${USER_ID}/Items` && call.params.get('GenreIds') === '77' && call.params.get('IncludeItemTypes') === 'MusicAlbum').params.get('GenreIds'), '77');
+  assert.equal(calls.findLast(call => call.path === '/Artists/AlbumArtists' && call.params.get('GenreIds') === '77').params.get('GenreIds'), '77', 'a genre tagged on the artist alone is found too');
+  assert.equal(calls.findLast(call => call.params.get('AlbumArtistIds') === '501').params.get('IncludeItemTypes'), 'MusicAlbum', 'the albums of those artists');
+  const genreTracks = await get('/lib/call/libraryItems/9?view=tracks&genre=77');
+  assert.equal(genreTracks.items[0]?.type, 'track', 'the tracks of a genre are found through its albums');
+  assert.equal(calls.findLast(call => call.params.get('IncludeItemTypes') === 'Audio').params.get('AlbumIds'), '502');
   const tracks = await get('/lib/call/libraryItems/9?view=tracks');
   assert.deepEqual([tracks.items[0].type, tracks.items[0].artist, tracks.items[0].album, tracks.items[0].episode], ['track', 'The Band', 'The Record', 2]);
   assert.equal(new URLSearchParams(tracks.items[0].thumbnail.split('?')[1]).get('path'), '502/Primary', 'a track shows its album\'s picture');

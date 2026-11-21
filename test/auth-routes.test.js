@@ -127,6 +127,14 @@ test('actual login routes bind state, fail closed, ignore forged profile data an
       mediaTime: 12, videoQueueLength: 3, videoDropCount: 1 } });
   assert.equal(health.status, 204);
   assert.match(readFileSync(path.join(temporary, 'canvas-health.log'), 'utf8'), /"videoDropCount":1/);
+  // A page lifecycle event is kept in the file even though the state is "playing".
+  const lifecycle = await request('/api/playback/canvas-health', { method: 'POST', cookie: sessionCookie,
+    body: { playbackId: 'health-test', state: 'playing', lifecycle: 'freeze', mediaTime: 99 } });
+  assert.equal(lifecycle.status, 204);
+  assert.match(readFileSync(path.join(temporary, 'canvas-health.log'), 'utf8'), /"lifecycle":"freeze"/);
+  const badLifecycle = await request('/api/playback/canvas-health', { method: 'POST', cookie: sessionCookie,
+    body: { playbackId: 'health-test', state: 'playing', lifecycle: 'nonsense' } });
+  assert.equal(badLifecycle.status, 400);
   const invalidHealth = await request('/api/playback/canvas-health', { method: 'POST', cookie: sessionCookie,
     body: { playbackId: 'health-test', state: 'playing', videoDropCount: 'bad' } });
   assert.equal(invalidHealth.status, 400);

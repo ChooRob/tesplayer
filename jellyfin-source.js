@@ -495,7 +495,7 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
   // little or no metadata, so they are "video" libraries, which is where Play and Shuffle are offered.
   const LIBRARY_TYPES = { movies: 'movie', tvshows: 'show', homevideos: 'video', musicvideos: 'video', music: 'music' };
   // A music library can be listed by artist, by album or straight to every track.
-  const MUSIC_VIEWS = [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }];
+  const MUSIC_VIEWS = [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }, { id: 'genres', label: 'Genres' }];
   const MUSIC_TYPES = new Set(['artist', 'album', 'track']);
   // A home video or a music video is a film as far as the pages go: a video, played from its start or where it was left.
   const TYPES = { Movie: 'movie', Video: 'movie', MusicVideo: 'movie', Series: 'show', Season: 'season', Episode: 'episode', MusicArtist: 'artist', MusicAlbum: 'album', Audio: 'track' };
@@ -610,11 +610,23 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
   // How each way of listing a music library is ordered: by artist, then album, then track, as Plex Web lists them.
   const MUSIC_ORDER = { artists: 'SortName', albums: 'AlbumArtist,SortName', tracks: 'AlbumArtist,Album,ParentIndexNumber,IndexNumber' };
 
+  // The libraries as the pages list them; Genres is offered only where there are some (one small request per music library).
   async function libraries(credential) {
+    return Promise.all((await libraryList(credential)).map(async library => (library.views ? { ...library, views: await musicViews(credential, library.id) } : library)));
+  }
+
+  // Just each library's ID, name and type, for code that only needs to find one.
+  async function libraryList(credential) {
     const views = await api(`/UserViews?${userQuery(credential)}`, { credential });
     return (views.Items || [])
       .filter(view => LIBRARY_TYPES[view.CollectionType])
       .map(view => ({ id: view.Id, title: view.Name, type: LIBRARY_TYPES[view.CollectionType], ...(view.CollectionType === 'music' ? { views: MUSIC_VIEWS } : {}) }));
+  }
+
+  // The ways to list a music library; Genres only when it has some (a library with no genre tags would show an empty tab).
+  async function musicViews(credential, libraryId) {
+    const genres = await api(`/MusicGenres?${userQuery(credential, { ParentId: libraryId, Limit: '1' })}`, { credential }).catch(() => null);
+    return genres?.Items?.length ? MUSIC_VIEWS : MUSIC_VIEWS.filter(view => view.id !== 'genres');
   }
 
   // An item's subtitle streams and the media source they belong to.
@@ -663,9 +675,63 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
         return { timed, lines: timed ? lines : lines.map(line => ({ startMs: null, text: line.text })) };
       } catch { return { timed: false, lines: [] }; }
     }
+    // Everything in a music library that has a genre, found both ways round (see libraryItems).
+    async function genreContents(libraryId, genre) {
+      const all = async params => {
+        const found = [];
+        for (let at = 0; ; at += 500) {
+          const data = await items({ ParentId: libraryId, Recursive: 'true', Fields: ITEM_FIELDS, StartIndex: String(at), Limit: '500', ...params });
+          found.push(...(data.Items || []));
+          if ((data.Items || []).length < 500) break;
+        }
+        return found;
+      };
+      const chunks = ids => Array.from({ length: Math.ceil(ids.length / 40) }, (_, i) => ids.slice(i * 40, i * 40 + 40).join(','));
+      // By the genre's ID; where a server does not match its IDs that way, by its name.
+      let albums = new Map((await all({ IncludeItemTypes: 'MusicAlbum', GenreIds: genre })).map(album => [String(album.Id), album]));
+      let tracks = new Map((await all({ IncludeItemTypes: 'Audio', GenreIds: genre })).map(track => [String(track.Id), track]));
+      if (!albums.size && !tracks.size) {
+        const named = await api(`/Items/${genre}?${userQuery(credential)}`, { credential }).catch(() => null);
+        if (named?.Name) {
+          albums = new Map((await all({ IncludeItemTypes: 'MusicAlbum', Genres: named.Name })).map(album => [String(album.Id), album]));
+          tracks = new Map((await all({ IncludeItemTypes: 'Audio', Genres: named.Name })).map(track => [String(track.Id), track]));
+        }
+      }
+      // A genre may be tagged on the artist alone (the servers list those too): the albums of such artists.
+      const artistIds = [];
+      for (let at = 0; ; at += 500) {
+        const page = await api(`/Artists/AlbumArtists?${userQuery(credential, { ParentId: libraryId, GenreIds: genre, StartIndex: String(at), Limit: '500' })}`, { credential }).catch(() => null);
+        artistIds.push(...(page?.Items || []).map(artist => String(artist.Id)));
+        if ((page?.Items || []).length < 500) break;
+      }
+      for (const ids of chunks(artistIds)) for (const album of await all({ IncludeItemTypes: 'MusicAlbum', AlbumArtistIds: ids })) albums.set(String(album.Id), album);
+      for (const ids of chunks([...albums.keys()])) for (const track of await all({ IncludeItemTypes: 'Audio', AlbumIds: ids })) tracks.set(String(track.Id), track);
+      const missing = [...new Set([...tracks.values()].map(track => String(track.AlbumId ?? '')).filter(id => id && !albums.has(id)))];
+      for (const ids of chunks(missing)) for (const album of await all({ IncludeItemTypes: 'MusicAlbum', Ids: ids })) albums.set(String(album.Id), album);
+      const text = value => String(value ?? '');
+      return {
+        albums: [...albums.values()].sort((a, b) => text(a.AlbumArtist).localeCompare(text(b.AlbumArtist)) || text(a.SortName || a.Name).localeCompare(text(b.SortName || b.Name))),
+        tracks: [...tracks.values()].sort((a, b) => text(a.AlbumArtist).localeCompare(text(b.AlbumArtist)) || text(a.Album).localeCompare(text(b.Album)) || (a.ParentIndexNumber ?? 0) - (b.ParentIndexNumber ?? 0) || (a.IndexNumber ?? 0) - (b.IndexNumber ?? 0)),
+      };
+    }
+
     return {
       libraries: () => libraries(credential),
-      async libraryItems(libraryId, { sort, view, start, size } = {}) {
+      async libraryItems(libraryId, { sort, view, start, size, genre } = {}) {
+        // A music library's genres, each opening the albums that have it.
+        if (view === 'genres') {
+          const paging = { ...(Number.isInteger(start) ? { StartIndex: String(start) } : {}), ...(size ? { Limit: String(size) } : {}) };
+          const data = await api(`/MusicGenres?${userQuery(credential, { ParentId: libraryId, SortBy: 'SortName', SortOrder: 'Ascending', ...paging })}`, { credential });
+          return { total: data.TotalRecordCount, items: (data.Items || []).map(item => ({ ratingKey: String(item.Id), type: 'genre', title: item.Name, sortTitle: item.SortName || item.Name })) };
+        }
+        // A genre's albums or tracks: whatever carries the genre, a track or its album (servers tag either), with the
+        // tracks of the albums that have it and the albums of the tracks that have it.
+        if (genre && (view === 'albums' || view === 'tracks')) {
+          const contents = await genreContents(libraryId, genre);
+          const list = view === 'albums' ? contents.albums : contents.tracks;
+          const from = Number.isInteger(start) ? start : 0;
+          return { total: list.length, items: list.slice(from, size ? from + size : undefined).map(mapListItem) };
+        }
         // A music library: its artists, albums or tracks, in pages.
         if (MUSIC_ORDER[view]) {
           const paging = { ...(Number.isInteger(start) ? { StartIndex: String(start) } : {}), ...(size ? { Limit: String(size) } : {}) };
@@ -680,7 +746,7 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
       },
       async recentlyAdded(libraryId) {
         // A music library's new arrivals are albums (not each of their tracks).
-        const music = (await libraries(credential)).find(view => view.id === libraryId)?.type === 'music';
+        const music = (await libraryList(credential)).find(view => view.id === libraryId)?.type === 'music';
         const latest = await api(`/Items/Latest?${userQuery(credential, { ParentId: libraryId, Limit: '12', Fields: ITEM_FIELDS, GroupItems: 'true', ...(music ? { IncludeItemTypes: 'MusicAlbum' } : {}) })}`, { credential });
         return (Array.isArray(latest) ? latest : []).map(item => mapHubItem(item, libraryId));
       },
@@ -838,7 +904,7 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
       async continueWatching() {
         const results = [];
         const seen = new Set();
-        for (const view of await libraries(credential)) {
+        for (const view of await libraryList(credential)) {
           if (view.type === 'music') continue;
           try {
             const [resume, nextUp] = await Promise.all([

@@ -22,7 +22,7 @@ const THUMBNAIL_PRESETS = {
 const MUSIC_TYPES = new Set(['artist', 'album', 'track']);
 // The pictures a page may ask for: an item's art, or a playlist's composite of its tracks' art.
 const THUMBNAIL_PATH = /^\/(?:library\/metadata\/\d+\/(?:thumb|art|banner)|playlists\/\d+\/composite)(?:\/\d+)?$/;
-const MUSIC_VIEWS = [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }];
+const MUSIC_VIEWS = [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }, { id: 'genres', label: 'Genres' }];
 
 export function createPlexLibrary({ plexUrl, token, clientId, productName = 'FreeStuffCrazy Player' }) {
   // Without a client identifier, two different profiles' requests are
@@ -73,22 +73,36 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
     // Plex calls a music library "artist"; sources call it "music". An "Other Videos" library is a film
     // library that uses no metadata agent (YouTube downloads, home videos): sources call it "video".
     const typeOf = (d) => (d.type === 'artist' ? 'music' : d.type === 'movie' && /\.none$/.test(d.agent || '') ? 'video' : d.type);
-    return data.MediaContainer.Directory.map((d) => ({
+    // Genres is a way to list a music library only when it has some (an empty tab is not shown).
+    const hasGenres = async (id) => {
+      const genres = await plexApi(`/library/sections/${encodeURIComponent(id)}/genre?type=9`).catch(() => null);
+      return (genres?.MediaContainer?.Directory || []).length > 0;
+    };
+    return Promise.all(data.MediaContainer.Directory.map(async (d) => ({
       id: d.key, title: d.title, type: typeOf(d),
       // Ways to list a library besides its default (the first): see "Music" in PLUGIN_DEVELOPMENT.md.
-      ...(d.type === 'artist' ? { views: MUSIC_VIEWS } : {}),
-    }));
+      ...(d.type === 'artist' ? { views: (await hasGenres(d.key)) ? MUSIC_VIEWS : MUSIC_VIEWS.filter((view) => view.id !== 'genres') } : {}),
+    })));
   }
 
   // A music library can be listed by artist, or straight to every album or every track.
   // Plex asks for those with a numeric type (9 albums, 10 tracks) on the section's /all.
   const VIEW_TYPES = { albums: 9, tracks: 10 };
 
-  async function libraryItems(id, { sort = 'addedAt:desc', start = 0, size, view } = {}) {
+  async function libraryItems(id, { sort = 'addedAt:desc', start = 0, size, view, genre } = {}) {
+    // A music library's genres (those of its albums), each opening the albums that have it.
+    if (view === 'genres') {
+      const data = await plexApi(`/library/sections/${encodeURIComponent(id)}/genre?type=9`);
+      const all = (data.MediaContainer.Directory || []).map((d) => ({ ratingKey: String(d.key), type: 'genre', title: d.title, sortTitle: d.title }));
+      all.sort((a, b) => a.title.localeCompare(b.title));
+      return { total: all.length, items: size ? all.slice(start, start + size) : all };
+    }
     // Albums and tracks are left in Plex's own order (by artist, then album, then track), as Plex
     // Web lists them; a sort by title would scatter an artist's albums through the alphabet.
     const query = [
       VIEW_TYPES[view] ? `type=${VIEW_TYPES[view]}` : `sort=${encodeURIComponent(sort)}`,
+      // (Plex tags a track's genre on its album, so the tracks of a genre are those of its albums.)
+      ...(genre && VIEW_TYPES[view] ? [`${VIEW_TYPES[view] === 10 ? 'album.genre' : 'genre'}=${encodeURIComponent(genre)}`] : []),
       ...(size ? [`X-Plex-Container-Start=${start}`, `X-Plex-Container-Size=${size}`] : []),
     ].join('&');
     const data = await plexApi(`/library/sections/${encodeURIComponent(id)}/all?${query}`);

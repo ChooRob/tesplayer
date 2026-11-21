@@ -21,7 +21,7 @@ export function fallbackArt(title) {
   const size = lines.some((line) => line.length > 11) ? 34 : 42;
   const top = 200 - ((lines.length - 1) * size * 1.25) / 2;
   const text = lines.map((line, i) => `<text x="200" y="${Math.round(top + i * size * 1.25)}" text-anchor="middle" dominant-baseline="middle" font-family="-apple-system,system-ui,sans-serif" font-weight="600" font-size="${size}" fill="#fff">${escapeXml(line)}</text>`).join('');
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><defs><linearGradient id="g" x1="0" y1="0" x2=".6" y2="1"><stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#1e3a8a"/></linearGradient></defs><rect width="400" height="400" fill="url(#g)"/>${text}</svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><defs><linearGradient id="g" x1="0" y1="0" x2=".6" y2="1"><stop offset="0" stop-color="#1f4a8a"/><stop offset="1" stop-color="#10254a"/></linearGradient></defs><rect width="400" height="400" fill="url(#g)"/>${text}</svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
