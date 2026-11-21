@@ -698,8 +698,13 @@ export async function createJellyfinSource({ id = 'jellyfin', config, plugins = 
         }
       }
       // A genre may be tagged on the artist alone (the servers list those too): the albums of such artists.
-      const artists = await api(`/Artists/AlbumArtists?${userQuery(credential, { ParentId: libraryId, GenreIds: genre, Limit: '500' })}`, { credential }).catch(() => null);
-      for (const ids of chunks((artists?.Items || []).map(artist => String(artist.Id)))) for (const album of await all({ IncludeItemTypes: 'MusicAlbum', AlbumArtistIds: ids })) albums.set(String(album.Id), album);
+      const artistIds = [];
+      for (let at = 0; ; at += 500) {
+        const page = await api(`/Artists/AlbumArtists?${userQuery(credential, { ParentId: libraryId, GenreIds: genre, StartIndex: String(at), Limit: '500' })}`, { credential }).catch(() => null);
+        artistIds.push(...(page?.Items || []).map(artist => String(artist.Id)));
+        if ((page?.Items || []).length < 500) break;
+      }
+      for (const ids of chunks(artistIds)) for (const album of await all({ IncludeItemTypes: 'MusicAlbum', AlbumArtistIds: ids })) albums.set(String(album.Id), album);
       for (const ids of chunks([...albums.keys()])) for (const track of await all({ IncludeItemTypes: 'Audio', AlbumIds: ids })) tracks.set(String(track.Id), track);
       const missing = [...new Set([...tracks.values()].map(track => String(track.AlbumId ?? '')).filter(id => id && !albums.has(id)))];
       for (const ids of chunks(missing)) for (const album of await all({ IncludeItemTypes: 'MusicAlbum', Ids: ids })) albums.set(String(album.Id), album);
