@@ -501,7 +501,7 @@ test('music keeps playing while you browse: the player sits in a frame, with a b
   // the player
   assert.match(player, /const embedded = window\.parent !== window && new URLSearchParams\(location\.search\)\.get\('embedded'\) === '1';/);
   assert.match(player, /if \(embedded\) \{ window\.parent\.postMessage\(\{ type: MUSIC_MESSAGE, event: 'minimize' \}, location\.origin\); return; \}/, '"Browse" only shrinks it');
-  assert.match(player, /if \(embedded\) target\.searchParams\.set\('embedded', '1'\);/, 'the next track stays in the frame');
+  assert.match(player, /if \(embedded && !leavesFrame\) target\.searchParams\.set\('embedded', '1'\);/, 'the next track stays in the frame (a video does not)');
   assert.match(player, /fromParent\(event, window\.parent, location\.origin\)/, 'only its own page is listened to');
   assert.match(player, /cleanCommand\(event\.data\)/);
   assert.match(player, /broadcastMusic\(true\);\s+\n?\s*(?:renderPlayPause|updateNext|\S)/, 'state changes are reported');
@@ -566,7 +566,7 @@ test('music reads ahead, several segments at once at every quality, so the car i
   assert.match(html, /if \(next !== current\) \{/, 'a radio queue that rolled is saved, and one that did not is left alone, whatever the length');
   assert.doesNotMatch(html, /next\.items\.length === queueData\.items\.length/);
   assert.match(html, /const readAheadParallelism = queueData \? MUSIC_READ_AHEAD_PARALLELISM : undefined;/);
-  assert.match(html, /const readAheadSeconds = queueData \? MUSIC_READ_AHEAD_SECONDS : READ_AHEAD_SECONDS\[currentQuality\] \|\| 0;/);
+  assert.match(html, /const readAheadSeconds = queueData \? MUSIC_READ_AHEAD_SECONDS : filmReadAhead\[currentQuality\] \|\| 0;/);
 });
 
 test('the queue title is light enough to read on the dark panel', () => {
@@ -788,4 +788,24 @@ test('music going round again on a shuffled repeat is mixed at the end, and that
     'mixed again before it goes round, with any track opened ahead (taken from the old order) let go');
   assert.match(page, /if \(wrapsReshuffled\(withIndex\(queueData, queueIndex\)\)\) return;\s+const pos = nextPosition\(withIndex\(queueData, queueIndex\), \{ auto: true \}\);/,
     'nothing is opened ahead from the end of such a queue, since what follows is not known yet');
+});
+
+test('a playlist screen plays all of it, tracks as music and videos as films, and shows every entry', () => {
+  const html = readFileSync(new URL('../public/browse.html', import.meta.url), 'utf8');
+  const screen = html.slice(html.indexOf('async function openPlaylist'), html.indexOf('async function openSeason'));
+  assert.match(screen, /play: \(\) => playQueue\(\{ label: playlist\.title, items: entries \}\)/);
+  assert.match(screen, /shuffle: \(\) => playQueue\(\{ label: playlist\.title, items: entries, shuffle: true \}\)/);
+  assert.match(screen, /renderGrid\(entries,/, 'every entry is shown, not just the tracks');
+  // A queue that opens on a video starts as a film does.
+  assert.match(html, /video = video \|\| !!queue\.items\[queue\.index\]\.video;/);
+});
+
+test('the player opens each queue entry the way it is: a video as a film (taking the page from a frame), a track as music', () => {
+  const player = readFileSync(new URL('../public/canvas2.html', import.meta.url), 'utf8');
+  assert.match(player, /goToItem\(track\.ratingKey, \{ queue: queueData\?\.id, video: !!track\.video \}\)/);
+  assert.match(player, /queueId\) target\.searchParams\.set\(video \? 'videoQueue' : 'queue', queueId\)/);
+  assert.match(player, /const leavesFrame = embedded && video;/);
+  assert.match(player, /\(leavesFrame \? window\.parent\.location : location\)\.replace\(target\)/);
+  assert.match(player, /if \(!track \|\| track\.video\) return;/, 'a video is not opened ahead as music');
+  assert.match(player, /if \(!track \|\| track\.video \|\| movingOn/, 'a video is not skipped to in the music page');
 });

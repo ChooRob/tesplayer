@@ -85,6 +85,9 @@
     .card img {
       width: 100%; aspect-ratio: 2/3; object-fit: cover; display: block;
     }
+    /* Artwork that is missing or fails to load: the title on a blue tile, not the browser's broken-image icon. */
+    .thumbWrap.noArt img { visibility: hidden; }
+    .thumbWrap.noArt::after { content: attr(data-title); position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; box-sizing: border-box; padding: 10px; text-align: center; overflow: hidden; overflow-wrap: anywhere; font: 600 clamp(13px, 1.6vw, 18px)/1.25 -apple-system, system-ui, sans-serif; color: #fff; background: linear-gradient(160deg, #3b82f6, #1e3a8a); }
     .card.episode img { aspect-ratio: 16/9; }
     /* Music artwork (artists, albums, tracks) is square. */
     .card.square img { aspect-ratio: 1/1; }
@@ -112,6 +115,9 @@
     .carouselRow::-webkit-scrollbar { display: none; }
     .recentCard.artist { width: 150px; }
     .recentCard.artist img { aspect-ratio: 1/1; }
+    /* An album in Recently Added is square too. */
+    .recentCard.album { width: 150px; }
+    .recentCard.album img { aspect-ratio: 1/1; }
     /* The # A-Z bar at the right edge of a long list: tap a letter to go to that section. */
     /* It runs the full height of the page (under the header), and each letter takes an equal share of it, so the
        taller the screen the bigger the letters and the touch targets. */
@@ -410,6 +416,7 @@
   <script type="module">
     import { renderMetadata } from "/metadata.js";
     import { getTabs, getTab } from "/tab-registry.js";
+    import { showArt } from "/artwork.js";
     import { createViewGuard, wasAborted } from "/view-guard.js";
     import { readBrowseView, writeBrowseView } from "/browse-location.js";
     import { filterItems } from "/browse-filter.js";
@@ -573,7 +580,7 @@
       setDetailActions(actions);
       const backdropEl = document.getElementById('detailBackdrop');
       backdropEl.style.backgroundImage = item.backdrop ? `url(${item.backdrop})` : '';
-      document.getElementById('detailPosterImg').src = poster || item.thumbnail || '';
+      showArt(document.getElementById('detailPosterImg'), poster || item.thumbnail, item.title);
       document.getElementById('detailTitle').textContent = item.title;
       document.getElementById('detailSubtitle').textContent = subtitle;
 
@@ -650,7 +657,7 @@
           thumbWrap.className = 'thumbWrap';
           const img = document.createElement('img');
           img.loading = 'lazy'; // before src, or the image starts loading at once
-          img.src = item.thumbnail || '';
+          setArt(thumbWrap, img, item.thumbnail, item.showTitle || item.title);
           thumbWrap.appendChild(img);
 
           if (item.durationMs && item.viewOffset > 0) {
@@ -791,7 +798,7 @@
         if (!showBar) return;
         els.title.textContent = state.title || 'Playing';
         els.artist.textContent = [state.artist, state.album].filter(Boolean).join(' — ');
-        if (state.thumbnail) els.art.src = state.thumbnail;
+        if (state.thumbnail) showArt(els.art, state.thumbnail, state.album || state.title);
         els.fill.style.width = state.duration ? `${Math.min(100, (state.position / state.duration) * 100)}%` : '0%';
         els.time.textContent = state.duration ? `${clockOf(state.position)} / ${clockOf(state.duration)}` : '';
         // What the player means to be doing, so a moment of buffering still shows Pause.
@@ -928,6 +935,8 @@
       try { saved = saveQueue(sessionStorage, queue); } catch { /* the player then plays this track alone */ }
       const first = queue.items[queue.index].ratingKey;
       const params = new URLSearchParams({ key: first });
+      // A queue of videos, or one (a playlist) that opens on a video, starts as a film does.
+      video = video || !!queue.items[queue.index].video;
       const firstItem = video && !shuffle ? list.find((item) => String(item.ratingKey) === first) : null;
       if (firstItem) setResume(params, firstItem);
       // The player takes `queue` to mean music from its first moment, so videos name their queue apart.
@@ -1020,7 +1029,7 @@
         thumbWrap.className = 'thumbWrap';
         const img = document.createElement('img');
         img.loading = 'lazy'; // before src, or the image starts loading at once
-        img.src = item.thumbnail || '';
+        setArt(thumbWrap, img, item.thumbnail, item.type === 'episode' ? item.showTitle : item.title);
         thumbWrap.appendChild(img);
         card.appendChild(thumbWrap);
 
@@ -1064,7 +1073,7 @@
 
       const img = document.createElement('img');
       img.loading = 'lazy'; // before src, or the image starts loading at once
-      img.src = item.thumbnail || '';
+      setArt(thumbWrap, img, item.thumbnail, item.title);
       thumbWrap.appendChild(img);
 
       if (item.durationMs && item.viewOffset > 0) {
@@ -1101,7 +1110,8 @@
       } else if (item.type === 'artist') {
         meta.textContent = item.leafCount ? `${item.leafCount} tracks` : '';
       } else if (item.type === 'playlist') {
-        meta.textContent = [item.leafCount ? `${item.leafCount} tracks` : null, item.duration ? `${item.duration}m` : null].filter(Boolean).join(' · ');
+        // (A playlist may hold videos as well as tracks.)
+        meta.textContent = [item.leafCount ? `${item.leafCount} ${item.leafCount === 1 ? 'item' : 'items'}` : null, item.duration ? `${item.duration}m` : null].filter(Boolean).join(' · ');
       } else if (episode) {
         meta.textContent = item.duration ? `${item.duration}m` : '';
       } else {
@@ -1638,6 +1648,18 @@
       requestAnimationFrame(() => rows.forEach((row) => row.updateCarouselButtons?.()));
     }
 
+    // Sets an artwork image's source, and swaps in the titled tile (see .noArt) when there is none or it fails.
+    function setArt(wrap, img, src, label) {
+      img.alt = '';
+      const showTile = () => {
+        wrap.dataset.title = String(label || '').trim();
+        wrap.classList.add('noArt');
+      };
+      if (!src) { showTile(); return; }
+      img.addEventListener('error', showTile, { once: true });
+      img.src = src;
+    }
+
     // An artist as a card in a carousel: its picture and name, opening its page.
     function buildArtistCard(artist) {
       const card = document.createElement('div');
@@ -1646,8 +1668,7 @@
       wrap.className = 'thumbWrap';
       const img = document.createElement('img');
       img.loading = 'lazy';
-      img.src = artist.thumbnail || '';
-      img.alt = '';
+      setArt(wrap, img, artist.thumbnail, artist.title);
       wrap.append(img);
       const title = document.createElement('div');
       title.className = 'title';
@@ -1670,19 +1691,24 @@
       showLoading();
       clearGrid();
       try {
-        const tracks = await fetchJson(`/api/library/playlist/${playlist.ratingKey}/items`, { signal: view.signal });
+        const entries = await fetchJson(`/api/library/playlist/${playlist.ratingKey}/items`, { signal: view.signal });
         if (!view.isCurrent()) return;
-        if (tracks.length) clearLoading(); else showMessage('This playlist is empty');
+        // A playlist can hold music, videos or both (see sources.js): Play and Shuffle go through all of it, and the
+        // player plays each entry the way it is, a track as music and a video as a film.
+        const tracks = entries.filter((item) => item.type === 'track');
+        const videos = entries.filter((item) => item.type === 'movie' || item.type === 'episode');
+        if (entries.length) clearLoading(); else showMessage('This playlist is empty');
         currentQueueLabel = playlist.title;
+        const count = (n, one, many) => (n ? `${n} ${n === 1 ? one : many}` : null);
         renderDetailHeader({ title: playlist.title, thumbnail: playlist.thumbnail, genres: [], summary: '' }, {
-          subtitle: [`${tracks.length} tracks`, playlist.duration ? `${playlist.duration} min` : null].filter(Boolean).join(' · '),
+          subtitle: [count(tracks.length, 'track', 'tracks'), count(videos.length, 'video', 'videos'), playlist.duration ? `${playlist.duration} min` : null].filter(Boolean).join(' · '),
           onBack,
-          actions: tracks.length ? {
-            play: () => playQueue({ label: playlist.title, items: tracks }),
-            shuffle: () => playQueue({ label: playlist.title, items: tracks, shuffle: true }),
+          actions: entries.length ? {
+            play: () => playQueue({ label: playlist.title, items: entries }),
+            shuffle: () => playQueue({ label: playlist.title, items: entries, shuffle: true }),
           } : null,
         });
-        renderGrid(tracks, { episode: true });
+        renderGrid(entries, { episode: !videos.length });
       } catch (err) {
         if (!view.isCurrent() || wasAborted(err)) return;
         showMessage(`Failed to load: ${err.message}`);

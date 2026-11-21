@@ -143,7 +143,7 @@ export class Player {
     this.audioInput = null;
   }
 
-  async load(url, { direct = false, readAheadSeconds = 0, readAheadParallelism = 2, startTime = 0 } = {}) {
+  async load(url, { direct = false, readAheadSeconds = 0, readAheadMaxBytes, readAheadParallelism = 2, startTime = 0 } = {}) {
     this.setState('loading');
     ++this.generation;
     // Loading over a track that is already playing (music moving on without a page reload): silence it first.
@@ -155,7 +155,7 @@ export class Player {
     // Through the relay, a media server that is slow to answer is waited for (see media-retry.js).
     const relayFetch = createRetryingFetch({ onWaiting: (detail) => this.onMediaWait(detail) });
     if (readAheadSeconds > 0 && !direct) {
-      this.prefetcher = new SegmentPrefetcher({ readAheadSeconds, parallelism: readAheadParallelism, fetchFn: relayFetch });
+      this.prefetcher = new SegmentPrefetcher({ readAheadSeconds, maxBytes: readAheadMaxBytes, parallelism: readAheadParallelism, fetchFn: relayFetch });
       sourceOptions.fetchFn = this.prefetcher.fetch;
     } else if (!direct) {
       sourceOptions.fetchFn = relayFetch;

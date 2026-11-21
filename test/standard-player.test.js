@@ -105,7 +105,7 @@ test('VOD loading falls back once on direct failure and propagates proxy failure
     const banners = [];
     let hidden = 0;
     const context = {
-      startUrl: '/api/start?key=123', readAheadSeconds: 60, readAheadParallelism: undefined, startTime: 0, directAttempt: mode !== 'forced-proxy', vodLoading: true,
+      startUrl: '/api/start?key=123', readAheadSeconds: 60, readAheadMaxBytes: undefined, readAheadParallelism: undefined, startTime: 0, directAttempt: mode !== 'forced-proxy', vodLoading: true,
       // As if the media server was slow to answer and "Waking the media server…" is up.
       waitingForServer: mode === 'forced-proxy', hideBanner: () => { hidden += 1; },
       showBanner: (text, options = {}) => banners.push({ text, ...options }), rejectBlockedPlayback: async () => false,

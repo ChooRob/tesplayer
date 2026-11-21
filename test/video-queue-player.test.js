@@ -271,3 +271,14 @@ test('music has no Size or Move controls, and a size saved for films is not appl
   assert.match(html, /const shown = musicPage \? CENTERED : picture;/);
   assert.doesNotMatch(html, /layer === '1'/, 'the repaint experiment is gone');
 });
+
+test('an MCU3 reads further ahead of a film, and may hold more of it; other devices keep the usual amounts', () => {
+  const html = readFileSync(new URL('../public/canvas2.html', import.meta.url), 'utf8');
+  assert.match(html, /const READ_AHEAD_SECONDS = \{ low: 60, medium: 30, high: 0 \};/, 'the usual amounts');
+  assert.match(html, /const MCU3_READ_AHEAD_SECONDS = \{ low: 90, medium: 60, high: 60, ultra: 30 \};/);
+  assert.match(html, /const MCU2_READ_AHEAD_SECONDS = \{ \.\.\.READ_AHEAD_SECONDS, high: 10 \};/, 'an MCU2 gets only a little, at High');
+  assert.match(html, /const filmReadAhead = \{ mcu3: MCU3_READ_AHEAD_SECONDS, mcu2: MCU2_READ_AHEAD_SECONDS \}\[thisDevice\(\)\] \|\| READ_AHEAD_SECONDS;/);
+  assert.match(html, /const readAheadMaxBytes = !queueData && isMcu3\(\) \? MCU3_READ_AHEAD_MAX_BYTES : undefined;/, 'music keeps its own limit');
+  const player = readFileSync(new URL('../public/engine/player.js', import.meta.url), 'utf8');
+  assert.match(player, /new SegmentPrefetcher\(\{ readAheadSeconds, maxBytes: readAheadMaxBytes,/);
+});

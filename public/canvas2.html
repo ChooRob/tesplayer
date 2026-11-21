@@ -544,12 +544,12 @@
         document.documentElement.classList.add('music');
         const $ = (name) => document.getElementById(name);
         const sub = [track.artist, track.album].filter(Boolean).join(' · ');
-        $('musicCoverImg').src = track.thumbnail || '';
+        showArt($('musicCoverImg'), track.thumbnail, track.album || track.title);
         $('musicCoverTitle').textContent = track.title;
         $('musicCoverSub').textContent = sub;
         $('titleDisplay').textContent = track.artist ? `${track.artist} — ${track.title}` : track.title;
         $('musicQueueAlbum').textContent = saved.label || track.album || '';
-        $('musicQueueLabel').textContent = `${saved.shuffled ? 'Shuffled' : 'Playing from'} · ${saved.items.length} tracks`;
+        $('musicQueueLabel').textContent = `${saved.shuffled ? 'Shuffled' : 'Playing from'} · ${saved.items.length} ${saved.items.some((item) => item.video) ? 'items' : 'tracks'}`;
         const clock = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
         const from = Math.max(0, at - 20);
         const rows = saved.items.slice(from, at + 60).map((item, offset) => {
@@ -604,7 +604,8 @@
     import { CENTERED, normalizePicture, readPicture, savePicture } from '/picture-layout.js';
     import { normalizeVolume, readVolume, saveVolume, VOLUME_KEY, MUSIC_VOLUME_KEY } from '/volume-level.js';
     import { waitForServer } from '/engine/server-wait.js';
-    import { useSourceRate } from '/engine/audio-rate.js';
+    import { useSourceRate, isMcu3, thisDevice } from '/engine/device.js';
+    import { showArt } from '/artwork.js';
     hydrateIcons();
     import { createQuotaGuard } from '/engine/quota-guard.js';
     import { createPlaybackBanner } from '/playback-banner.js';
@@ -821,6 +822,14 @@
       }
 
       const READ_AHEAD_SECONDS = { low: 60, medium: 30, high: 0 };
+      // An MCU3 has the memory and the speed to hold much more of a film downloaded, which rides out the car's
+      // connection dropping for a while (a minute of High is about 15 MB, of Ultra about 45). Its limit on what is held
+      // goes up with it.
+      const MCU3_READ_AHEAD_SECONDS = { low: 90, medium: 60, high: 60, ultra: 30 };
+      // An MCU2 is slow, and the page's one thread has little to spare, so only a little: enough to ride out a short
+      // dip at High, which had none (about 2.5 MB). Raise it if the health reports show no extra lag or dropped frames.
+      const MCU2_READ_AHEAD_SECONDS = { ...READ_AHEAD_SECONDS, high: 10 };
+      const MCU3_READ_AHEAD_MAX_BYTES = 48 * 1024 * 1024;
       // Music is asked for at 48 kHz, for the car's slow browser, unless this one is known not to be it.
       const musicStartParams = (values) => {
         const params = new URLSearchParams(values);
@@ -1495,7 +1504,8 @@
         const track = queue[index];
         if (!track) return;
         if (queueData) saveQueue(sessionStorage, withIndex(queueData, index));
-        const reload = () => goToItem(track.ratingKey, { queue: queueData?.id });
+        // (A playlist can hold videos among its tracks: each is opened the way it is, as music or as a film.)
+        const reload = () => goToItem(track.ratingKey, { queue: queueData?.id, video: !!track.video });
         if (!queueData) { reload(); return; }
         // Music moves on inside the page; if that cannot be done, the page is loaded afresh as before.
         void skipToTrack(index).then((moved) => { if (!moved && !skipping) reload(); });
@@ -1888,7 +1898,8 @@
         if (wrapsReshuffled(withIndex(queueData, queueIndex))) return;
         const pos = nextPosition(withIndex(queueData, queueIndex), { auto: true });
         const track = pos === null ? null : queueData.items[pos];
-        if (!track) return;
+        // (A video among the tracks is not opened ahead as music.)
+        if (!track || track.video) return;
         const plan = { key: String(track.ratingKey), pos, id: newPlaybackId(), item: null, ready: false };
         nextPlan = plan;
         // While its stream starts, the server is between two streams: report nothing, so neither report is refused.
@@ -1961,7 +1972,7 @@
       let skipping = false;
       async function skipToTrack(pos) {
         const track = queueData?.items[pos];
-        if (!track || movingOn || isLive || skipping || !isMusic || selection.mode !== 'canvas' || typeof player?.adoptPrepared !== 'function') return false;
+        if (!track || track.video || movingOn || isLive || skipping || !isMusic || selection.mode !== 'canvas' || typeof player?.adoptPrepared !== 'function') return false;
         skipping = true;
         setHeartbeatsPaused(true);
         // A track that has just played out has already cleared wantsPlayback (finishIfPlayedOut), but moving on
@@ -2149,22 +2160,25 @@
         if (queue.length) { goNext({ auto }); return; }
         if (nextEpisode) goToItem(nextEpisode.ratingKey);
       }
-      function goToItem(ratingKey, { queue: queueId = null } = {}) {
+      function goToItem(ratingKey, { queue: queueId = null, video = !isMusic } = {}) {
         if (movingOn || isLive) return;
         nextCountdown.cancel();
         movingOn = true;
         discardNextPlan();
         const target = new URL('/canvas2', location.origin);
         target.searchParams.set('key', ratingKey);
-        if (queueId) target.searchParams.set(isMusic ? 'queue' : 'videoQueue', queueId);
-        if (embedded) target.searchParams.set('embedded', '1');
+        // `queue` means music from the first moment, so a video names its queue apart.
+        if (queueId) target.searchParams.set(video ? 'videoQueue' : 'queue', queueId);
+        // Music held behind the browse screen gives way to a video: the video takes the whole page.
+        const leavesFrame = embedded && video;
+        if (embedded && !leavesFrame) target.searchParams.set('embedded', '1');
         // Keep where we came from and how the viewer plays; quality is chosen afresh.
         for (const name of ['playback']) {
           if (urlParams.has(name)) target.searchParams.set(name, urlParams.get(name));
         }
         // The next episode may be in another season, so Back goes to the show, not the season.
         carryBrowseView(location.search, target.searchParams, { keepSeason: false });
-        location.replace(target);
+        (leavesFrame ? window.parent.location : location).replace(target);
       }
       playNextBtn.addEventListener('click', () => playNextEpisode());
       cancelNextBtn.addEventListener('click', cancelNextCountdown);
@@ -2174,7 +2188,7 @@
         isMusic = true;
         const artist = item.artist || item.showTitle || '';
         titleDisplayEl.textContent = artist ? `${artist} — ${item.title}` : item.title;
-        document.getElementById('musicCoverImg').src = item.thumbnail || '';
+        showArt(document.getElementById('musicCoverImg'), item.thumbnail, item.album || item.title, item.fallbackThumbnail);
         Object.assign(musicMeta, { title: item.title, artist, album: item.album || '', thumbnail: item.thumbnail || null });
         broadcastMusic(true);
         document.getElementById('musicCoverTitle').textContent = item.title;
@@ -2555,7 +2569,9 @@
         // further ahead whenever it has capacity to spare.
         // Music always reads three minutes ahead (most of a track): its audio is about 2 MB a minute, and without
         // it every segment waits out a full round trip on the car's connection, which drains the buffer.
-        const readAheadSeconds = queueData ? MUSIC_READ_AHEAD_SECONDS : READ_AHEAD_SECONDS[currentQuality] || 0;
+        const filmReadAhead = { mcu3: MCU3_READ_AHEAD_SECONDS, mcu2: MCU2_READ_AHEAD_SECONDS }[thisDevice()] || READ_AHEAD_SECONDS;
+        const readAheadSeconds = queueData ? MUSIC_READ_AHEAD_SECONDS : filmReadAhead[currentQuality] || 0;
+        const readAheadMaxBytes = !queueData && isMcu3() ? MCU3_READ_AHEAD_MAX_BYTES : undefined;
         const readAheadParallelism = queueData ? MUSIC_READ_AHEAD_PARALLELISM : undefined;
         const startTime = resumeSeconds;
         // Say so rather than leave the spinner running when the stream never starts.
@@ -2564,14 +2580,14 @@
           return error;
         };
         try {
-          await player.load(startUrl + (directAttempt ? '&direct=1' : ''), { direct: directAttempt, readAheadSeconds, readAheadParallelism, startTime });
+          await player.load(startUrl + (directAttempt ? '&direct=1' : ''), { direct: directAttempt, readAheadSeconds, readAheadMaxBytes, readAheadParallelism, startTime });
         } catch (error) {
           if (await rejectBlockedPlayback(error)) return;
           if (!directAttempt) throw failedToStart(error);
           directAttempt = false;
           showBanner('Direct connection unavailable — using server relay');
           waitingForServer = false; // that banner replaced the waiting one; the relay may have its own wait to show
-          try { await player.load(startUrl, { readAheadSeconds, readAheadParallelism, startTime }); }
+          try { await player.load(startUrl, { readAheadSeconds, readAheadMaxBytes, readAheadParallelism, startTime }); }
           catch (fallbackError) {
             if (await rejectBlockedPlayback(fallbackError)) return;
             throw failedToStart(fallbackError);

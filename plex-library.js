@@ -226,7 +226,10 @@ export function createPlexLibrary({ plexUrl, token, clientId, productName = 'Fre
       durationMs: m.duration || null,
       viewOffset: m.viewOffset || 0,
       // A track's cover is its album's, large because the player shows it that way.
-      thumbnail: thumbnailProxyUrl(m.type === 'track' ? (m.parentThumb || m.thumb) : m.thumb, m.type === 'track' ? 'cover' : MUSIC_TYPES.has(m.type) ? 'square' : 'poster'),
+      // An album with no art of its own shows its artist's, as Plex's own apps do; `fallbackThumbnail` is that, for
+      // when the album's picture is there but will not load.
+      thumbnail: thumbnailProxyUrl(m.type === 'track' ? (m.parentThumb || m.thumb || m.grandparentThumb) : m.thumb, m.type === 'track' ? 'cover' : MUSIC_TYPES.has(m.type) ? 'square' : 'poster'),
+      ...(m.type === 'track' && m.grandparentThumb ? { fallbackThumbnail: thumbnailProxyUrl(m.grandparentThumb, 'cover') } : {}),
       backdrop: thumbnailProxyUrl(m.art || m.thumb, 'backdrop'),
       // Music: who and what a track is part of (an album's own artist is its showTitle).
       ...(m.type === 'track' ? { artist: m.originalTitle || m.grandparentTitle || null, album: m.parentTitle || null } : {}),

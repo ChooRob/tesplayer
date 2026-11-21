@@ -235,3 +235,10 @@ test('only a shuffled queue repeating all at its end is mixed again; anything el
   const mixed = reshuffledForRepeat(withIndex(make({ shuffle: true, repeat: 'all' }), 5));
   assert.deepEqual(unshuffleQueue(mixed).items.map(item => item.ratingKey), films.map(item => item.ratingKey));
 });
+
+test('a queue remembers which of its entries are videos, so a playlist can hold both', async () => {
+  const { createQueue } = await import('../public/music-queue.js');
+  const queue = createQueue({ items: [{ ratingKey: '1', type: 'track', title: 'Song' }, { ratingKey: '2', type: 'movie', title: 'Film' }, { ratingKey: '3', type: 'episode', title: 'Pilot' }] });
+  assert.deepEqual(queue.items.map(item => item.video), [undefined, true, true]);
+  assert.equal('video' in queue.items[0], false, 'a track carries no flag');
+});

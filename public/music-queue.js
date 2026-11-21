@@ -17,6 +17,8 @@ export const trackSummary = track => ({
   thumbnail: track.thumbnail ?? null,
   episode: track.episode ?? null,
   season: track.season ?? null,
+  // A playlist can hold videos among its tracks; the player plays each the way it is (see canvas2.html).
+  ...(track.type === 'movie' || track.type === 'episode' ? { video: true } : {}),
 });
 
 // Fisher-Yates; `random` is injectable so a test can say which order comes out.
