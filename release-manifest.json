@@ -80,6 +80,7 @@
   "server.js",
   "test/admin-auth.test.js",
   "test/artwork.test.js",
+  "test/browse-tabs.test.js",
   "test/device.test.js",
   "test/auth-routes.test.js",
   "test/plex-account-identity.test.js",

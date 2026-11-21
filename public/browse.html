@@ -25,10 +25,27 @@
       padding: 8px 14px; font-size: 13px; cursor: pointer;
     }
     .toolbar { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
-    .libraries { display: flex; gap: 8px; flex-wrap: wrap; }
+    /* One row of tabs, however many there are: it scrolls sideways, and fades at an edge that has more behind it
+       (see updateTabFades). It takes what the search box leaves, so it can shrink to fit. */
+    .tabsWrap { position: relative; display: flex; flex: 1 1 0; min-width: 0; }
+    .libraries { display: flex; gap: 8px; flex-wrap: nowrap; flex: 1 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+    /* Arrows at the ends of the tab row, for a mouse (a finger just swipes); each shows only when there is more that way. */
+    .tabArrow {
+      position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 38px; height: 38px; border-radius: 50%;
+      background: rgba(20,20,20,0.85); color: #fff; border: 1px solid #555; cursor: pointer; padding: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .tabArrow:active { background: rgba(10,132,255,0.85); border-color: #0a84ff; }
+    .tabArrow[hidden] { display: none; }
+    .tabArrow.prev { left: 2px; }
+    .tabArrow.next { right: 2px; }
+    .libraries::-webkit-scrollbar { display: none; }
+    .libraries.fadeEnd { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent); }
+    .libraries.fadeStart { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 44px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 44px), transparent); }
+    .libraries.fadeStart.fadeEnd { -webkit-mask-image: linear-gradient(to right, transparent, #000 44px, #000 calc(100% - 44px), transparent); mask-image: linear-gradient(to right, transparent, #000 44px, #000 calc(100% - 44px), transparent); }
     .libraries button {
       background: #222; color: #eee; border: 1px solid #444; border-radius: 6px;
-      padding: 10px 16px; font-size: 14px; cursor: pointer;
+      padding: 10px 16px; font-size: 14px; cursor: pointer; flex: none; white-space: nowrap;
     }
     .libraries button.active { background: #0a84ff; border-color: #0a84ff; }
     /* While searching, each tab shows how many results it has; the tab whose results are on screen is lit. */
@@ -55,8 +72,7 @@
       .pageHeader { gap: 10px; }
       .brandLogoImg { width: 150px; }
       h1 { font-size: 17px; gap: 6px; }
-      .libraries { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-      .libraries button { min-height: 44px; white-space: nowrap; }
+      .libraries button { min-height: 44px; }
       #searchForm { margin-left: 0; width: 100%; }
       /* 16px stops iOS Safari zooming the page when the field is focused. */
       #searchBox #searchInput { flex: 1; min-width: 0; width: auto; font-size: 16px; min-height: 44px; padding-right: 44px; }
@@ -305,7 +321,11 @@
     Canvas playback is turned off, so videos use the standard player. In a Tesla, video only plays while parked.
   </div>
   <div class="toolbar">
-    <div class="libraries" id="libraries"></div>
+    <div class="tabsWrap">
+      <button type="button" class="tabArrow prev" id="tabsPrev" aria-label="Scroll tabs left" hidden><span data-icon="chevron-left"></span></button>
+      <div class="libraries" id="libraries"></div>
+      <button type="button" class="tabArrow next" id="tabsNext" aria-label="Scroll tabs right" hidden><span data-icon="chevron-right"></span></button>
+    </div>
     <form id="searchForm">
       <span id="searchBox">
         <input id="searchInput" type="search" placeholder="Search…" />
@@ -430,6 +450,39 @@
     const pageHeaderEl = document.querySelector('.pageHeader');
     const toolbarEl = document.querySelector('.toolbar');
     const librariesEl = document.getElementById('libraries');
+    // Tabs that do not all fit scroll sideways. An edge with more behind it fades out, so it is clear the row goes on, and
+    // the tab on screen is kept in view (a saved address can open on one far along).
+    const tabsPrev = document.getElementById('tabsPrev');
+    const tabsNext = document.getElementById('tabsNext');
+    function updateTabFades() {
+      const room = librariesEl.scrollWidth - librariesEl.clientWidth;
+      const before = librariesEl.scrollLeft > 4;
+      const after = room > 4 && librariesEl.scrollLeft < room - 4;
+      librariesEl.classList.toggle('fadeStart', before);
+      librariesEl.classList.toggle('fadeEnd', after);
+      tabsPrev.hidden = !before;
+      tabsNext.hidden = !after;
+    }
+    // A step is most of what is on screen, so a tab seen at the edge stays in sight.
+    tabsPrev.addEventListener('click', () => librariesEl.scrollBy({ left: -librariesEl.clientWidth * 0.8, behavior: 'smooth' }));
+    tabsNext.addEventListener('click', () => librariesEl.scrollBy({ left: librariesEl.clientWidth * 0.8, behavior: 'smooth' }));
+    function revealActiveTab() {
+      const tab = librariesEl.querySelector('button.active');
+      if (tab) {
+        const edge = 48; // clear of the fades
+        const box = tab.getBoundingClientRect();
+        const row = librariesEl.getBoundingClientRect();
+        if (box.left < row.left + edge) librariesEl.scrollLeft -= row.left + edge - box.left;
+        else if (box.right > row.right - edge) librariesEl.scrollLeft += box.right - (row.right - edge);
+      }
+      updateTabFades();
+    }
+    // Once the fonts are in, the tabs have their real widths: look again at where the chosen one is.
+    document.fonts?.ready.then(revealActiveTab);
+    librariesEl.addEventListener('scroll', updateTabFades, { passive: true });
+    window.addEventListener('resize', updateTabFades);
+    // Tabs coming and going, and a search's counts widening them, change how far the row goes.
+    new MutationObserver(updateTabFades).observe(librariesEl, { childList: true, subtree: true, characterData: true });
     const gridEl = document.getElementById('grid');
     const gridTopEl = document.getElementById('gridTop');
     const gridItemsEl = document.getElementById('gridItems');
@@ -554,6 +607,8 @@
       detailHeaderEl.style.display = 'none';
       pageHeaderEl.style.display = '';
       toolbarEl.style.display = '';
+      // A hidden element forgets how far it was scrolled, so the row comes back at its start: find the chosen tab again.
+      revealActiveTab();
     }
 
     // Render show metadata, optionally using the season’s poster.
@@ -1386,6 +1441,7 @@
       showRecentSection(false);
       hideDetailHeader();
       [...librariesEl.children].forEach((btn) => btn.classList.toggle('active', btn.dataset.id === tab.id));
+      revealActiveTab();
       gridEl.style.display = 'none';
       activePluginTab = tab;
       updateSearchPlaceholder();
@@ -1464,6 +1520,7 @@
       hideDetailHeader();
       if (lib.type !== 'playlists') loadRecentlyAdded(lib.id);
       [...librariesEl.children].forEach((btn) => btn.classList.toggle('active', btn.dataset.id === lib.id));
+      revealActiveTab();
       showLoading();
       clearGrid();
       renderViewSwitch(lib);
@@ -1828,6 +1885,7 @@
         btn.classList.toggle('active', selected);
         if (selected) btn.setAttribute('aria-current', 'true'); else btn.removeAttribute('aria-current');
       });
+      revealActiveTab();
       showLoading();
       clearGrid();
       renderViewSwitch(lib);
@@ -1887,6 +1945,7 @@
       currentLibraryId = lib.id;
       currentView = chooseView(lib, wantedView); // Back from the show returns to the list it was reached from
       [...librariesEl.children].forEach((btn) => btn.classList.toggle('active', btn.dataset.id === lib.id));
+      revealActiveTab();
       gridEl.style.display = '';
       if (!seasonKey) return openShowSeasons(showKey, 'this show');
       // The show's season list has everything a season needs, and says whether
