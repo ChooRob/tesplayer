@@ -561,7 +561,7 @@ test('the current lyric line is marked by colour alone, which is cheap for an ol
 
 test('music reads ahead, several segments at once at every quality, so the car is not waiting on each segment', () => {
   const html = readFileSync(new URL('../public/canvas2.html', import.meta.url), 'utf8');
-  assert.match(html, /const MUSIC_READ_AHEAD_SECONDS = 180;/);
+  assert.match(html, /const MUSIC_READ_AHEAD_SECONDS = 300;/);
   assert.match(html, /const MUSIC_READ_AHEAD_PARALLELISM = 2;/);
   assert.match(html, /if \(next !== current\) \{/, 'a radio queue that rolled is saved, and one that did not is left alone, whatever the length');
   assert.doesNotMatch(html, /next\.items\.length === queueData\.items\.length/);

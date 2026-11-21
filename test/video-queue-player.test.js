@@ -253,3 +253,21 @@ test('an in-order queue that repeats goes round in the same order, and a shuffle
   await tick();
   assert.equal(end.replaced.length, 0, 'without repeat it ends');
 });
+
+test('the adjustments and captions panels come above the music screen while they are open, so their sliders take taps', () => {
+  const html = readFileSync(new URL('../public/canvas2.html', import.meta.url), 'utf8');
+  assert.match(html, /#musicCover \{ position: fixed; z-index: 5;/);
+  assert.match(html, /body:has\(#dimPanel:not\(\[hidden\]\)\) #overlay, body:has\(#ccPanel:not\(\[hidden\]\)\) #overlay \{ z-index: 6; \}/);
+});
+
+test('music has no Size or Move controls, and a size saved for films is not applied to it', () => {
+  const html = readFileSync(new URL('../public/canvas2.html', import.meta.url), 'utf8');
+  assert.match(html, /id="sizeRow"/);
+  assert.match(html, /id="moveRow"/);
+  assert.match(html, /const musicPage = new URLSearchParams\(location\.search\)\.has\('queue'\);\s+setupFullscreenButton/);
+  assert.match(html, /if \(musicPage\) document\.getElementById\('fullscreenBtn'\)\.hidden = true;/, 'no fullscreen button for music');
+  assert.match(html, /body:has\(#musicCover:not\(\[hidden\]\)\) #dimLayer \{ z-index: 5; \}/, 'dim covers the whole music screen');
+  assert.match(html, /if \(musicPage\) \{ document\.getElementById\('sizeRow'\)\.hidden = true; document\.getElementById\('moveRow'\)\.hidden = true; \}/);
+  assert.match(html, /const shown = musicPage \? CENTERED : picture;/);
+  assert.doesNotMatch(html, /layer === '1'/, 'the repaint experiment is gone');
+});

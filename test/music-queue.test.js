@@ -215,8 +215,9 @@ test('a shuffled queue that repeats all is mixed again at the end, before it goe
   const orders = new Set(Array.from({ length: 30 }, () => reshuffledForRepeat(atEnd()).items.map(item => item.ratingKey).join()));
   assert.ok(orders.size > 10, `${orders.size} different orders in 30 tries`);
   // A fixed random that would put the one just played first still does not open on it.
-  const stubborn = reshuffledForRepeat(atEnd(), () => 0.999);
-  assert.notEqual(stubborn.items[0].ratingKey, atEnd().items[7].ratingKey);
+  const last = atEnd();
+  const stubborn = reshuffledForRepeat(last, () => 0.999);
+  assert.notEqual(stubborn.items[0].ratingKey, last.items[7].ratingKey);
 });
 
 test('only a shuffled queue repeating all at its end is mixed again; anything else is left as it was', () => {
