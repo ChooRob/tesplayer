@@ -31,7 +31,8 @@
 // `artist`, `album`, durationMs). Artwork is square. A track is played like any item: playback.start
 // answers with an HLS playlist, here audio only. A library may list `views` (artists, albums, tracks) and
 // libraryItems takes { sort, view, start, size }; sources that cannot page just answer with everything. Optional
-// playlists() -> [{ ratingKey, type: 'playlist', title, thumbnail, leafCount }], playlistItems(id) -> tracks, and
+// playlists() -> [{ ratingKey, type: 'playlist', title, thumbnail, leafCount }], playlistItems(id) -> tracks (a playlist may
+// also hold videos: items of type 'movie' or 'episode', in its order, which the page opens where they are), and
 // similarArtists(artistId) -> [{ title, items: [artist items] }], popularTracks(artistId) -> tracks and
 // similarTracks(trackId) -> tracks that sound like it (nearest first) list playlists,
 // artists like an artist and an artist's most played tracks;

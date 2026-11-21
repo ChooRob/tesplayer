@@ -33,7 +33,33 @@ async function fakeEmby(input, init = {}) {
   if (url.pathname.startsWith('/Items/') && url.pathname.endsWith('/Images/Primary'))
     return authorized ? new Response('png', { headers: { 'Content-Type': 'image/png' } }) : new Response('', { status: 401 });
   if (!authorized && !url.pathname.startsWith('/videos/')) return new Response('', { status: 401 });
-  if (url.pathname === `/Users/${USER_ID}/Views`) return json({ Items: [{ Id: '3', Name: 'Movies', CollectionType: 'movies' }, { Id: '9', Name: 'Music', CollectionType: 'music' }, { Id: '5', Name: 'Home', CollectionType: 'homevideos' }, { Id: '6', Name: 'Clips', CollectionType: 'musicvideos' }] });
+  if (url.pathname === `/Users/${USER_ID}/Views`) return json({ Items: [{ Id: '3', Name: 'Movies', CollectionType: 'movies' }, { Id: '9', Name: 'Music', CollectionType: 'music' }, { Id: '800', Name: 'Playlists', CollectionType: 'playlists' }, { Id: '5', Name: 'Home', CollectionType: 'homevideos' }, { Id: '6', Name: 'Clips', CollectionType: 'musicvideos' }] });
+  // A music library: one artist with one album of one track.
+  const artist = { Id: 501, Name: 'The Band', SortName: 'band', Type: 'MusicArtist', ImageTags: { Primary: 'x' }, SongCount: 1 };
+  const album = { Id: 502, Name: 'The Record', Type: 'MusicAlbum', ProductionYear: 2021, ImageTags: { Primary: 'x' }, AlbumArtist: 'The Band', AlbumArtists: [{ Id: 501, Name: 'The Band' }], ChildCount: 1 };
+  const track = { Id: 503, Name: 'The Song', Type: 'Audio', IndexNumber: 2, ParentIndexNumber: 1, Album: 'The Record', AlbumId: 502, AlbumPrimaryImageTag: 'x', Artists: ['The Band'],
+    AlbumArtist: 'The Band', AlbumArtists: [{ Id: 501, Name: 'The Band' }], ArtistItems: [{ Id: 501, Name: 'The Band' }], RunTimeTicks: 2_000_000_000, UserData: {}, ImageTags: {} };
+  // Emby refuses a field its playlist call does not list.
+  if (url.pathname === '/Playlists/700/Items') return url.searchParams.get('Fields') === 'PrimaryImageAspectRatio' ? json({ TotalRecordCount: 3, Items: [track, { Id: 909, Name: 'A Movie', Type: 'Movie', ProductionYear: 2009, RunTimeTicks: 36_000_000_000, ImageTags: { Primary: 'x' }, UserData: {} }, { Id: 910, Name: 'Photo', Type: 'Photo' }] }) : json({}, 400);
+  if (url.pathname === '/Artists/AlbumArtists') return json({ TotalRecordCount: 1, Items: [artist] });
+  if (url.pathname === '/Items/501/Similar') return json({ Items: [{ ...artist, Id: 600, Name: 'Another Band' }] });
+  if (url.pathname === '/Items/503/InstantMix') return json({ Items: [track, { ...track, Id: 504, Name: 'Next Song' }] });
+  if (url.pathname === `/Users/${USER_ID}/Items/501`) return json(artist);
+  if (url.pathname === `/Users/${USER_ID}/Items/502`) return json(album);
+  if (url.pathname === `/Users/${USER_ID}/Items/503`) return json(track);
+  // The Playlists folder holds a music playlist and a video one (a search for them can also turn up tracks, which are not playlists).
+  if (url.pathname === `/Users/${USER_ID}/Items` && url.searchParams.get('ParentId') === '800') return json({ TotalRecordCount: 3, Items: [
+    { Id: 700, Name: 'Road trip', Type: 'Playlist', MediaType: 'Audio', ChildCount: 3, ImageTags: {} },
+    { Id: 701, Name: 'Movie night', Type: 'Playlist', MediaType: 'Video', ChildCount: 5, ImageTags: {} },
+    { Id: 702, Name: 'Stray track', Type: 'Audio', MediaType: 'Audio', ImageTags: {} }] });
+  if (url.pathname === `/Users/${USER_ID}/Items` && url.searchParams.get('ParentId') === '9') return json({ TotalRecordCount: 1, Items: [url.searchParams.get('IncludeItemTypes') === 'MusicAlbum' ? album : track] });
+  // Tracks are found by who they are credited to and by their album's artist; here only the album's artist names this one.
+  if (url.pathname === `/Users/${USER_ID}/Items` && url.searchParams.get('AlbumArtistIds') === '501') return json({ TotalRecordCount: 1, Items: [url.searchParams.get('IncludeItemTypes') === 'Audio' ? track : album] });
+  if (url.pathname === `/Users/${USER_ID}/Items` && url.searchParams.get('ArtistIds') === '501') return json({ TotalRecordCount: 0, Items: [] });
+  if (url.pathname === `/Users/${USER_ID}/Items` && url.searchParams.get('ParentId') === '502') return json({ TotalRecordCount: 1, Items: [track] });
+  if (url.pathname === '/Items/503/PlaybackInfo') return json({ PlaySessionId: PLAY, MediaSources: [{ Id: 'mediasource_503', TranscodingUrl: `/audio/503/main.m3u8?DeviceId=x&PlaySessionId=${PLAY}&api_key=SECRET&AudioBitrate=256000` }] });
+  if (url.pathname === '/audio/503/main.m3u8') return new Response(`#EXTM3U\n#EXTINF:3.0,\nhls1/main/0.ts?PlaySessionId=${PLAY}\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
+  if (url.pathname === '/audio/503/hls1/main/0.ts') return new Response('SOUND', { headers: { 'Content-Type': 'audio/mp2t' } });
   if (url.pathname === `/Users/${USER_ID}/Items`) {
     return json({ TotalRecordCount: 1, Items: [{ Id: '909', Name: 'A Movie', Type: 'Movie', ProductionYear: 2009, RunTimeTicks: 36_000_000_000, ImageTags: { Primary: 'x' }, UserData: { PlaybackPositionTicks: 600_000_000 } }] });
   }
@@ -89,6 +115,9 @@ const library = read => async (req, res) => { try { res.json(await read(source.l
 app.get('/lib/libraries', library(lib => lib.libraries()));
 app.get('/lib/items/:id', library((lib, req) => lib.libraryItems(req.params.id, {})));
 app.get('/lib/item/:id', library((lib, req) => lib.itemDetails(req.params.id)));
+app.get('/lib/call/:method/:id', library((lib, req) => lib[req.params.method](req.params.id, { view: req.query.view, start: Number(req.query.start) || undefined, size: Number(req.query.size) || undefined })));
+app.get('/lib/playlists', library(lib => lib.playlists()));
+app.get('/lib/playlist/:id', library((lib, req) => lib.playlistItems(req.params.id)));
 app.get('/lib/tracks/:id', library((lib, req) => lib.subtitleTracks(req.params.id)));
 app.get('/lib/text/:id/:track', library(async (lib, req) => ({ text: await lib.subtitleText(req.params.id, req.params.track) })));
 app.get('/thumb', (req, res) => source.sendThumbnail(req, res));
@@ -139,7 +168,7 @@ test('a wrong password is refused and a right one signs in without exposing the 
 });
 
 test('libraries and items are shaped like the other sources', async () => {
-  assert.deepEqual(await (await send('/lib/libraries')).json(), [{ id: '3', title: 'Movies', type: 'movie' }, { id: '5', title: 'Home', type: 'video' }, { id: '6', title: 'Clips', type: 'video' }]);
+  assert.deepEqual(await (await send('/lib/libraries')).json(), [{ id: '3', title: 'Movies', type: 'movie' }, { id: '9', title: 'Music', type: 'music', views: [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }] }, { id: '5', title: 'Home', type: 'video' }, { id: '6', title: 'Clips', type: 'video' }]);
   const { total, items } = await (await send('/lib/items/3')).json();
   assert.equal(total, 1);
   assert.deepEqual(items[0], {
@@ -247,4 +276,50 @@ test('progress carries the play session Emby needs; watched, stop and sign-out r
   await send('/logout', { method: 'POST' });
   await new Promise(resolve => setImmediate(resolve));
   assert.ok(calls.some(call => call.path === '/Sessions/Logout'), 'the token is revoked at Emby');
+});
+
+test('a music library lists artists, albums and tracks, and opens artist to album to track', async () => {
+  const get = async path => (await send(path)).json();
+  const artists = await get('/lib/call/libraryItems/9?view=artists&start=0&size=500');
+  assert.deepEqual([artists.total, artists.items[0].type, artists.items[0].title, artists.items[0].ratingKey], [1, 'artist', 'The Band', '501']);
+  assert.equal(calls.findLast(call => call.path === '/Artists/AlbumArtists').params.get('Limit'), '500');
+  const albums = await get('/lib/call/libraryItems/9?view=albums');
+  assert.deepEqual([albums.items[0].type, albums.items[0].showRatingKey, albums.items[0].showTitle], ['album', '501', 'The Band']);
+  const tracks = await get('/lib/call/libraryItems/9?view=tracks');
+  assert.deepEqual([tracks.items[0].type, tracks.items[0].artist, tracks.items[0].album, tracks.items[0].episode], ['track', 'The Band', 'The Record', 2]);
+  assert.equal(new URLSearchParams(tracks.items[0].thumbnail.split('?')[1]).get('path'), '502/Primary', 'a track shows its album\'s picture');
+
+  assert.deepEqual((await get('/lib/call/showSeasons/501')).map(item => [item.type, item.title, item.showTitle]), [['album', 'The Record', 'The Band']]);
+  assert.equal((await get('/lib/call/seasonEpisodes/502'))[0].title, 'The Song');
+  assert.equal((await get('/lib/call/showEpisodes/501'))[0].title, 'The Song');
+  const details = await get('/lib/item/503');
+  assert.deepEqual([details.type, details.artist, details.album, details.parentKey, details.grandparentKey], ['track', 'The Band', 'The Record', '502', '501']);
+  assert.equal(new URLSearchParams(details.fallbackThumbnail.split('?')[1]).get('path'), '501/Primary', 'the artist\'s picture is there to fall back on');
+  assert.equal((await get('/lib/call/popularTracks/501'))[0].title, 'The Song');
+  assert.equal((await get('/lib/call/similarArtists/501'))[0].items[0].title, 'Another Band');
+  assert.deepEqual((await get('/lib/call/similarTracks/503')).map(item => item.title), ['Next Song']);
+});
+
+test('a track plays as sound only, at 48 kHz unless the track\'s own rate is asked for', async () => {
+  const response = await send('/api/start?key=503');
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.match(await response.text(), /\/proxy\/audio\/503\/hls1\/main\/0\.ts/);
+  const info = calls.findLast(call => call.path === '/Items/503/PlaybackInfo');
+  assert.equal(info.body.DeviceProfile.TranscodingProfiles[0].Type, 'Audio');
+  assert.equal(info.params.get('MaxStreamingBitrate'), '256000');
+  const master = calls.findLast(call => call.path === '/audio/503/main.m3u8');
+  assert.equal(master.params.get('AudioSampleRate'), '48000');
+  assert.equal(master.params.has('SubtitleStreamIndex'), false);
+  assert.equal((await send('/api/start?key=503&rate=source')).status, 200);
+  assert.equal(calls.findLast(call => call.path === '/audio/503/main.m3u8').params.has('AudioSampleRate'), false);
+});
+
+test('playlists are listed whatever they hold, and a stray track is not one', async () => {
+  const lists = await (await send('/lib/playlists')).json();
+  assert.deepEqual(lists.map(list => [list.ratingKey, list.title, list.leafCount]), [['700', 'Road trip', 3], ['701', 'Movie night', 5]]);
+});
+
+test('a playlist can hold music and videos together, in order, and skips what it cannot play', async () => {
+  const tracks = await (await send('/lib/playlist/700')).json();
+  assert.deepEqual(tracks.map(item => [item.type, item.ratingKey, item.title, item.episode]), [['track', '503', 'The Song', 1], ['movie', '909', 'A Movie', undefined]]);
 });

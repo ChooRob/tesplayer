@@ -23,6 +23,12 @@ const MUSIC_VIDEOS = '8'.repeat(32);
 const MOVIE = 'e'.repeat(32);
 const EPISODE = 'f'.repeat(32);
 const PLAY = '1'.repeat(32);
+const MUSIC = '0'.repeat(32);
+const ARTIST = '3'.repeat(32);
+const ALBUM = '4'.repeat(32);
+const TRACK = '5'.repeat(32);
+const PLAYLISTS = '9'.repeat(30) + 'aa';
+const TRACK_DASHED = `${TRACK.slice(0, 8)}-${TRACK.slice(8, 12)}-${TRACK.slice(12, 16)}-${TRACK.slice(16, 20)}-${TRACK.slice(20)}`;
 const DASHED = `${MOVIE.slice(0, 8)}-${MOVIE.slice(8, 12)}-${MOVIE.slice(12, 16)}-${MOVIE.slice(16, 20)}-${MOVIE.slice(20)}`;
 const pluginPath = path.join(temporary, 'limits-plugin.js');
 writeFileSync(pluginPath, `
@@ -77,6 +83,7 @@ globalThis.fetch = async (value, options = {}) => {
     { Id: LIB, Name: 'Movies', CollectionType: 'movies' },
     { Id: SHOWS, Name: 'Shows', CollectionType: 'tvshows' },
     { Id: '0'.repeat(32), Name: 'Music', CollectionType: 'music' },
+    { Id: PLAYLISTS, Name: 'Playlists', CollectionType: 'playlists' },
     { Id: HOME_VIDEOS, Name: 'Home', CollectionType: 'homevideos' },
     { Id: MUSIC_VIDEOS, Name: 'Clips', CollectionType: 'musicvideos' },
   ] });
@@ -84,6 +91,41 @@ globalThis.fetch = async (value, options = {}) => {
     UserData: { PlaybackPositionTicks: 90 * 1e7 }, ImageTags: { Primary: 'tag' }, BackdropImageTags: ['b'] };
   const episode = { Id: EPISODE, Name: 'Pilot', Type: 'Episode', SeriesName: 'Show', ParentIndexNumber: 1, IndexNumber: 2,
     RunTimeTicks: 30 * 60 * 1e7, UserData: {}, ImageTags: { Primary: 'tag' } };
+  // A music library: one artist with one album of one track.
+  const artist = { Id: ARTIST, Name: 'The Band', SortName: 'band', Type: 'MusicArtist', ImageTags: { Primary: 'tag' }, SongCount: 1 };
+  const album = { Id: ALBUM, Name: 'The Record', Type: 'MusicAlbum', ProductionYear: 2021, ImageTags: { Primary: 'tag' }, AlbumArtist: 'The Band',
+    AlbumArtists: [{ Id: ARTIST, Name: 'The Band' }], ChildCount: 1 };
+  const track = { Id: TRACK, Name: 'The Song', Type: 'Audio', IndexNumber: 2, ParentIndexNumber: 1, Album: 'The Record', AlbumId: ALBUM, AlbumPrimaryImageTag: 'tag',
+    Artists: ['The Band'], AlbumArtist: 'The Band', AlbumArtists: [{ Id: ARTIST, Name: 'The Band' }], ArtistItems: [{ Id: ARTIST, Name: 'The Band' }],
+    RunTimeTicks: 200 * 1e7, UserData: {}, ImageTags: {}, MediaSources: [{ MediaStreams: [{ Type: 'Audio', Codec: 'flac' }] }] };
+  if (p === '/Artists/AlbumArtists') return json({ TotalRecordCount: 1, Items: [artist] });
+  if (p === `/Artists/${ARTIST}/Similar`) return json({ Items: [{ ...artist, Id: '6'.repeat(32), Name: 'Another Band' }] });
+  if (p === `/Items/${TRACK}/InstantMix`) return json({ Items: [track, { ...track, Id: '7'.repeat(31) + 'a', Name: 'Next Song' }] });
+  if (p === `/Audio/${TRACK}/Lyrics`) return json({ Lyrics: [{ Start: 10 * 1e7, Text: 'First line' }, { Start: 20 * 1e7, Text: 'Second line' }] });
+  if (p === `/Items/${ARTIST}`) return json(artist);
+  if (p === `/Items/${ALBUM}`) return json(album);
+  if (p === `/Items/${TRACK}`) return json(track);
+  if (p === '/Items' && url.searchParams.get('ParentId') === MUSIC) {
+    const types = url.searchParams.get('IncludeItemTypes');
+    return json({ TotalRecordCount: 1, Items: [types === 'MusicAlbum' ? album : track] });
+  }
+  // Tracks are found by who they are credited to and by their album's artist; here only the album's artist names this one.
+  if (p === '/Items' && url.searchParams.get('AlbumArtistIds') === ARTIST) return json({ TotalRecordCount: 1, Items: [url.searchParams.get('IncludeItemTypes') === 'Audio' ? track : album] });
+  if (p === '/Items' && url.searchParams.get('ArtistIds') === ARTIST) return json({ TotalRecordCount: 0, Items: [] });
+  if (p === '/Items' && url.searchParams.get('ParentId') === ALBUM) return json({ TotalRecordCount: 1, Items: [track] });
+  if (p === '/Items' && (url.searchParams.get('ArtistIds') || url.searchParams.get('AlbumArtistIds'))) return json({ TotalRecordCount: 0, Items: [] });
+  // A playlist of a track, a film, an episode and a photo (which is not played here).
+  if (p === `/Playlists/${'2'.repeat(32)}/Items`) return json({ Items: [track, movie, episode, { Id: '1'.repeat(31) + 'b', Name: 'Photo', Type: 'Photo' }] });
+  if (p === `/Items/${TRACK}/PlaybackInfo`) return json({ PlaySessionId: PLAY, MediaSources: [{ Id: TRACK,
+    TranscodingUrl: `/audio/${TRACK_DASHED}/main.m3u8?DeviceId=x&PlaySessionId=${PLAY}&ApiKey=jf-token&AudioBitrate=256000&SubtitleStreamIndex=-1` }] });
+  if (p === `/audio/${TRACK_DASHED}/main.m3u8`) return new Response(`#EXTM3U\n#EXTINF:6.0,\nhls1/main/0.ts?PlaySessionId=${PLAY}\n#EXT-X-ENDLIST\n`, { headers: { 'Content-Type': 'application/vnd.apple.mpegurl' } });
+  if (p === `/audio/${TRACK_DASHED}/hls1/main/0.ts`) return new Response(new Uint8Array(188), { headers: { 'Content-Type': 'audio/mp2t' } });
+  if (p === `/Items/${TRACK}/Images/Primary` || p === `/Items/${ALBUM}/Images/Primary` || p === `/Items/${ARTIST}/Images/Primary`) return new Response(new Uint8Array(20), { headers: { 'Content-Type': 'image/jpeg' } });
+  // The Playlists folder holds a music playlist and a video one (a search for them can also turn up tracks, which are not playlists).
+  if (p === '/Items' && url.searchParams.get('ParentId') === PLAYLISTS) return json({ TotalRecordCount: 3, Items: [
+    { Id: '2'.repeat(32), Name: 'Road trip', Type: 'Playlist', MediaType: 'Audio', ChildCount: 3, ImageTags: {} },
+    { Id: '8'.repeat(32), Name: 'Movie night', Type: 'Playlist', MediaType: 'Video', ChildCount: 5, ImageTags: {} },
+    { Id: '6'.repeat(32), Name: 'Stray track', Type: 'Audio', MediaType: 'Audio', ImageTags: {} }] });
   if (p === '/Items' && url.searchParams.get('ParentId') === LIB) return json({ TotalRecordCount: 1, Items: [movie] });
   if (p === `/Items/${MOVIE}`) return json({ ...movie, Overview: 'About it', Genres: ['Drama'],
     MediaSources: [{ Id: MOVIE, MediaStreams: [{ Type: 'Video', Codec: 'hevc', Width: 3840, Height: 2160 },
@@ -200,10 +242,12 @@ test('browsing returns the same shapes the pages already use for Plex', async ()
   const cookie = await session();
   assert.deepEqual((await request('/api/library/libraries', { cookie })).json,
     [{ id: LIB, title: 'Movies', type: 'movie' }, { id: SHOWS, title: 'Shows', type: 'show' },
+      { id: MUSIC, title: 'Music', type: 'music', views: [{ id: 'artists', label: 'Artists' }, { id: 'albums', label: 'Albums' }, { id: 'tracks', label: 'Tracks' }] },
       { id: HOME_VIDEOS, title: 'Home', type: 'video' }, { id: MUSIC_VIDEOS, title: 'Clips', type: 'video' }]);
   const { items } = (await request(`/api/library/library/${LIB}?sort=titleSort`, { cookie })).json;
   // A source without playlists, similar artists or lyrics answers with none, not an error.
-  assert.deepEqual((await request('/api/library/playlists', { cookie })).json, []);
+  // Playlists are listed whatever they hold (and a stray track is not one).
+  assert.deepEqual((await request('/api/library/playlists', { cookie })).json.map(playlist => [playlist.title, playlist.leafCount]), [['Road trip', 3], ['Movie night', 5]]);
   assert.deepEqual((await request(`/api/library/similar/${MOVIE}`, { cookie })).json, { sections: [] });
   assert.deepEqual((await request(`/api/library/lyrics/${MOVIE}`, { cookie })).json, { tracks: [] });
   assert.deepEqual((await request(`/api/library/popular/${MOVIE}`, { cookie })).json, []);
@@ -398,6 +442,74 @@ test('a master playlist that lists Trickplay thumbnails still plays, and anythin
     assert.ok(logged.some(line => /playlist entry refused/.test(line) && /Subtitles\/1\/stream\.vtt/.test(line)), logged.join('\n'));
     assert.ok(!logged.some(line => /jf-token/.test(line)), 'the log never carries the token');
   } finally { console.error = quiet; jellyfin.extraMasterLines = ''; }
+});
+
+test('a music library lists artists, albums and tracks, and opens artist to album to track', async () => {
+  const cookie = await session();
+  const artists = (await request(`/api/library/library/${MUSIC}?view=artists&start=0&size=500`, { cookie })).json;
+  assert.equal(artists.total, 1);
+  assert.deepEqual([artists.items[0].type, artists.items[0].title, artists.items[0].sortTitle], ['artist', 'The Band', 'band']);
+  assert.equal(new URLSearchParams(artists.items[0].thumbnail.split('?')[1]).get('path'), `${ARTIST}/Primary`);
+  assert.equal(callsTo('/Artists/AlbumArtists').at(-1).url.searchParams.get('Limit'), '500');
+
+  const albums = (await request(`/api/library/library/${MUSIC}?view=albums`, { cookie })).json;
+  assert.deepEqual([albums.items[0].type, albums.items[0].title, albums.items[0].showRatingKey, albums.items[0].showTitle], ['album', 'The Record', ARTIST, 'The Band']);
+  assert.equal(callsTo('/Items').at(-1).url.searchParams.get('IncludeItemTypes'), 'MusicAlbum');
+
+  const tracks = (await request(`/api/library/library/${MUSIC}?view=tracks`, { cookie })).json;
+  assert.deepEqual([tracks.items[0].type, tracks.items[0].artist, tracks.items[0].album, tracks.items[0].episode, tracks.items[0].season], ['track', 'The Band', 'The Record', 2, 1]);
+  // A track shows its album's picture.
+  assert.equal(new URLSearchParams(tracks.items[0].thumbnail.split('?')[1]).get('path'), `${ALBUM}/Primary`);
+
+  // An artist's children are its albums, an album's children its tracks, and the artist has every track in one list.
+  const kids = (await request(`/api/library/show/${ARTIST}/seasons`, { cookie })).json;
+  assert.deepEqual(kids.map(item => [item.type, item.title, item.showTitle]), [['album', 'The Record', 'The Band']]);
+  assert.equal((await request(`/api/library/season/${ALBUM}/episodes`, { cookie })).json[0].title, 'The Song');
+  assert.equal((await request(`/api/library/show/${ARTIST}/episodes`, { cookie })).json[0].title, 'The Song');
+
+  const details = (await request(`/api/library/item/${TRACK}`, { cookie })).json;
+  assert.deepEqual([details.type, details.artist, details.album, details.parentKey, details.grandparentKey], ['track', 'The Band', 'The Record', ALBUM, ARTIST]);
+  assert.equal(new URLSearchParams(details.thumbnail.split('?')[1]).get('path'), `${ALBUM}/Primary`);
+  // The artist's picture is there to fall back on.
+  assert.equal(new URLSearchParams(details.fallbackThumbnail.split('?')[1]).get('path'), `${ARTIST}/Primary`);
+  assert.equal((await request(`/api/library/item/${ARTIST}`, { cookie })).json.type, 'artist');
+
+  assert.equal((await request(`/api/library/popular/${ARTIST}`, { cookie })).json[0].title, 'The Song');
+  assert.equal((await request(`/api/library/similar/${ARTIST}`, { cookie })).json.sections[0].items[0].title, 'Another Band');
+  assert.deepEqual((await request(`/api/library/similar-tracks/${TRACK}`, { cookie })).json.map(item => item.title), ['Next Song']);
+});
+
+test('a playlist can hold music and videos together, in order, and skips what it cannot play', async () => {
+  const cookie = await session();
+  const entries = (await request(`/api/library/playlist/${'2'.repeat(32)}/items`, { cookie })).json;
+  assert.deepEqual(entries.map(item => [item.type, item.title, item.episode]), [['track', 'The Song', 1], ['movie', 'Test Movie', undefined], ['episode', 'Pilot', 2]]);
+  assert.equal(callsTo(`/Playlists/${'2'.repeat(32)}/Items`).at(-1).url.searchParams.get('Fields'), 'PrimaryImageAspectRatio');
+});
+
+test('a track has its lyrics, timed when each line has a start', async () => {
+  const cookie = await session();
+  assert.deepEqual((await request(`/api/library/lyrics/${TRACK}`, { cookie })).json, { tracks: [{ id: '0', label: 'Lyrics', timed: true }] });
+  assert.deepEqual((await request(`/api/library/lyric/${TRACK}/0`, { cookie })).json,
+    { timed: true, lines: [{ startMs: 10_000, text: 'First line' }, { startMs: 20_000, text: 'Second line' }] });
+});
+
+test('a track plays as sound only, at 48 kHz unless the track\'s own rate is asked for', async () => {
+  const cookie = await session();
+  const first = await request(`/api/start?key=${TRACK}&playbackId=music-1`, { cookie });
+  assert.equal(first.status, 200, first.text);
+  assert.match(first.text, /\/proxy\/audio\/[0-9a-f-]+\/hls1\/main\/0\.ts/);
+  const info = callsTo(`/Items/${TRACK}/PlaybackInfo`, 'POST').at(-1);
+  assert.equal(info.body.DeviceProfile.TranscodingProfiles[0].Type, 'Audio');
+  assert.equal(info.body.DeviceProfile.TranscodingProfiles[0].AudioCodec, 'aac');
+  assert.equal(info.url.searchParams.get('maxStreamingBitrate'), '256000');
+  const master = callsTo(`/audio/${TRACK_DASHED}/main.m3u8`).at(-1).url;
+  assert.equal(master.searchParams.get('AudioSampleRate'), '48000');
+  assert.equal(master.searchParams.get('AudioBitrate'), '256000');
+  assert.equal(master.searchParams.has('SubtitleStreamIndex'), false);
+
+  const own = await request(`/api/start?key=${TRACK}&playbackId=music-2&rate=source`, { cookie });
+  assert.equal(own.status, 200, own.text);
+  assert.equal(callsTo(`/audio/${TRACK_DASHED}/main.m3u8`).at(-1).url.searchParams.has('AudioSampleRate'), false);
 });
 
 test('signing out everywhere rejects this user’s other cookies', async () => {
